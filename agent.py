@@ -3,6 +3,7 @@ import argparse
 from dataclasses import dataclass
 import json
 import logging
+import re
 import time
 from typing import Callable
 
@@ -17,6 +18,16 @@ from windows_controller import WindowsController
 
 logger = logging.getLogger(__name__)
 MAX_MULTIPLE_TOOL_RETRIES = 1
+_DIRECT_NOTEPAD_TYPE_REQUEST = re.compile(
+    r"open notepad and type (.+)", re.IGNORECASE | re.DOTALL
+)
+
+
+def explicit_direct_notepad_text(task: str) -> str | None:
+    """Return the literal suffix for the simple direct task form, without normalization."""
+    match = _DIRECT_NOTEPAD_TYPE_REQUEST.fullmatch(task)
+    return match.group(1) if match else None
+
 
 SYSTEM_PROMPT = """You are DesktopAgent's local planner. The user's task is the only task authority.
 Use Ollama's native function tools when requesting an action. Return no more than ONE advertised
@@ -65,6 +76,7 @@ class Agent:
             return AgentOutcome("invalid_task", "Provide a nonempty task of at most 4000 characters", history)
         if self.cancellation.cancelled:
             return AgentOutcome("cancelled", "No action executed", history)
+        direct_requested_text = explicit_direct_notepad_text(task)
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": task},
@@ -133,6 +145,12 @@ class Agent:
                     raise ValidationError("Tool action must contain only kind, tool and arguments")
                 name, arguments = action["tool"], action["arguments"]
                 self.registry.validate(name, arguments)
+                if (name == "type_text" and direct_requested_text is not None
+                        and arguments["text"] != direct_requested_text):
+                    raise ValidationError(
+                        "Proposed type_text does not exactly match the text in the direct task request; "
+                        "no typing action was executed"
+                    )
                 fingerprint = json.dumps([name, arguments], sort_keys=True)
                 if fingerprint in seen:
                     return AgentOutcome("repeated_action", "Identical action refused to prevent duplicate input", history)

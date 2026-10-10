@@ -11,8 +11,9 @@ bounded steps, accurate failure/unverified reporting, native tool-call request/
 response parsing, rejection of malformed calls, bounded re-prompt and safe stop
 for multiple calls, connection/timeout/HTTP-status/truncated-response handling,
 local-only configuration, missing-model guidance, exact append verification,
-verbatim-text prompt checks, bounded window/editor focus handoff, sanitized
-focus/input/verification failure messages, and a mocked Notepad workflow. INFO logs record
+verbatim-text prompt checks, direct-request text mismatch rejection, bounded
+window/editor focus handoff, sanitized focus/input/verification failure messages,
+and a mocked Notepad workflow. INFO logs record
 each planner response's wall-clock latency/type and tool name/status without
 task text or tool arguments; these timings become meaningful model measurements
 only when run against the actual local Ollama service.

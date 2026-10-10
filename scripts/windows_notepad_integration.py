@@ -26,9 +26,24 @@ def report(event: str, **fields) -> None:
     print("DIAGNOSTIC " + json.dumps({"event": event, **fields}, sort_keys=True), flush=True)
 
 
-def report_warnings(stage: str, captured) -> None:
+def report_warnings(stage: str, captured, redactions=()) -> None:
     for warning in captured:
-        report("python_warning", stage=stage, category=warning.category.__name__)
+        fields = {
+            "stage": stage,
+            "category": warning.category.__name__,
+            "source": Path(warning.filename).name,
+            "line": warning.lineno,
+        }
+        # ResourceWarning text is useful for diagnosing process/handle lifetime.
+        # Other warning messages are omitted so diagnostics cannot expose UI text.
+        if issubclass(warning.category, ResourceWarning):
+            message = str(warning.message)
+            for secret in redactions:
+                if secret:
+                    message = message.replace(secret, "[REDACTED]")
+            fields["message"] = message[:512]
+            fields["message_truncated"] = len(message) > 512
+        report("python_warning", **fields)
 
 
 def approve(action: str) -> bool:
@@ -134,7 +149,8 @@ def run() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     logging.getLogger("windows_controller").setLevel(logging.DEBUG)
     cancellation = Cancellation()
-    controller = WindowsController(launch_timeout=20.0, cancellation=cancellation)
+    controller = WindowsController(
+        launch_timeout=20.0, cancellation=cancellation, process_diagnostics=True)
 
     if not approve("Launch and identify one new blank Notepad window?"):
         report("window_discovery", status="denied", action_executed=False)
@@ -145,7 +161,12 @@ def run() -> int:
     report_warnings("open_notepad", caught)
     report("open_notepad", status=opened.status, message=opened.message)
     if opened.status != "verified":
-        report("result", status="failed", failed_stage="window_discovery_or_editor_identification")
+        mismatch = controller._last_process_mismatch_diagnostics
+        if mismatch is not None:
+            report("process_mismatch_diagnostics", **mismatch)
+        failed_stage = ("window_process_ownership" if mismatch is not None
+                        else "window_discovery_or_editor_identification")
+        report("result", status="failed", failed_stage=failed_stage)
         return 1
 
     with warnings.catch_warnings(record=True) as caught:
@@ -168,13 +189,13 @@ def run() -> int:
         report("input_delivery", status="failed", exception_type=type(exc).__name__,
                inspect_notepad_for_partial_input=True)
         return 1
-    report_warnings("type_text", caught)
+    report_warnings("type_text", caught, redactions=(expected,))
 
     report("controller_type_text", status=typed.status, message=typed.message)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         verified = independently_verify_text(controller, expected)
-    report_warnings("independent_text_verification", caught)
+    report_warnings("independent_text_verification", caught, redactions=(expected,))
     passed = typed.status == "verified" and verified
     report("result", status="passed" if passed else "failed",
            controller_verified=typed.status == "verified", independent_verified=verified,

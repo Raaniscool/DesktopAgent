@@ -11,7 +11,9 @@
 - `windows_controller.py`: lazy Windows imports, fixed Notepad launch with PID
   ownership check, pywinauto UIA identification/readback, explicit Win32 top-level
   foreground activation, UIA editor focus with bounded read-only confirmation,
-  fail-safe PyAutoGUI input and sanitized typing failures.
+  fail-safe PyAutoGUI input and sanitized typing failures. The standalone integration
+  test can additionally collect read-only process image/creation/parent-chain evidence;
+  this evidence never substitutes for the exact-PID ownership check.
 - `observation.py`: verified/unverified/failed/denied/cancelled results and history.
 
 Flow: task → native Ollama tool call → validate → display/approve → recheck

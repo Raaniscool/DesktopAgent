@@ -8,6 +8,7 @@ import time
 from observation import ToolResult
 from safety import Cancellation
 from tools.registry import PERMITTED_KEYS
+from windows_process_diagnostics import capture_process_hierarchy, summarize_process_relationship
 
 
 logger = logging.getLogger(__name__)
@@ -19,14 +20,18 @@ class DesktopGuardError(RuntimeError):
 
 class WindowsController:
     def __init__(self, launch_timeout: float, cancellation: Cancellation,
-                 max_text_length: int = 1000) -> None:
+                 max_text_length: int = 1000, process_diagnostics: bool = False) -> None:
         self.launch_timeout = launch_timeout
         self.cancellation = cancellation
         self.max_text_length = max_text_length
+        self.process_diagnostics = process_diagnostics
         self._window = None
         self._editor = None
         self._runtime_id = None
         self._launched_process_id = None
+        self._launch_executable_path = None
+        self._launch_process_diagnostics = None
+        self._last_process_mismatch_diagnostics = None
         self._pg = None
 
     def _load(self) -> None:
@@ -80,16 +85,32 @@ class WindowsController:
         if self._window is not None:
             logger.debug("desktop_stage=window_discovery status=failed reason=window_already_owned")
             return ToolResult("failed", "This task already owns a Notepad window; reopening is refused")
+        self._launched_process_id = None
+        self._launch_executable_path = None
+        self._launch_process_diagnostics = None
+        self._last_process_mismatch_diagnostics = None
         existing = self._desktop.windows(class_name="Notepad")
         logger.debug("desktop_stage=window_discovery status=checked existing_notepad_count=%d", len(existing))
         if existing:
             logger.debug("desktop_stage=window_discovery status=failed reason=preexisting_window")
             return ToolResult("failed", "Close all existing Notepad windows first to prevent tab/session reuse")
         executable = Path(os.environ["SystemRoot"]) / "System32" / "notepad.exe"
-        process = subprocess.Popen([str(executable)], shell=False)
+        self._launch_executable_path = str(executable)
+        process = subprocess.Popen([self._launch_executable_path], shell=False)
         self._launched_process_id = process.pid
         logger.debug("desktop_stage=window_discovery status=launch_requested executable=notepad.exe "
                      "launched_process_id=%s", self._launched_process_id)
+        if self.process_diagnostics:
+            try:
+                self._launch_process_diagnostics = capture_process_hierarchy((self._launched_process_id,))
+            except Exception as exc:
+                self._launch_process_diagnostics = {
+                    "status": "error",
+                    "exception_type": type(exc).__name__,
+                    "requested_pids": [self._launched_process_id],
+                    "processes": {},
+                    "chains": {},
+                }
         deadline = time.monotonic() + self.launch_timeout
         last_visible_count = None
         last_editor_count = None
@@ -110,9 +131,21 @@ class WindowsController:
                 window = windows[0]
                 window_process_id = window.element_info.process_id
                 if window_process_id != self._launched_process_id:
+                    try:
+                        window_hwnd = hex(int(window.handle))
+                    except (TypeError, ValueError, OverflowError):
+                        window_hwnd = None
+                    try:
+                        window_class = window.element_info.class_name
+                    except Exception as exc:
+                        window_class = f"unavailable:{type(exc).__name__}"
+                    if self.process_diagnostics:
+                        self._last_process_mismatch_diagnostics = self._diagnose_process_mismatch(
+                            window_process_id, window_hwnd, window_class)
                     logger.info("desktop_stage=window_discovery status=failed reason=process_mismatch "
-                                "launched_process_id=%s window_process_id=%s",
-                                self._launched_process_id, window_process_id)
+                                "hwnd=%s window_class=%s launched_process_id=%s window_process_id=%s "
+                                "ownership_confirmed=false input_sent=false",
+                                window_hwnd, window_class, self._launched_process_id, window_process_id)
                     return ToolResult("failed", "Could not confirm that the Notepad window belongs to the "
                                       "launched process; no input sent")
                 editors = [item for item in window.descendants()
@@ -156,6 +189,42 @@ class WindowsController:
                      last_visible_count, last_editor_count, last_tab_count)
         return ToolResult("failed", "Timed out identifying a single supported Notepad editor; "
                           "Notepad may be open. No input sent")
+
+    def _diagnose_process_mismatch(self, window_process_id, window_hwnd, window_class):
+        """Capture read-only process evidence; this never relaxes the PID ownership guard."""
+        launched_pid = self._launched_process_id
+        try:
+            current_snapshot = capture_process_hierarchy((launched_pid, window_process_id))
+            relationship = summarize_process_relationship(
+                launched_pid, window_process_id, self._launch_process_diagnostics, current_snapshot)
+        except Exception as exc:
+            current_snapshot = {
+                "status": "error",
+                "exception_type": type(exc).__name__,
+                "requested_pids": [launched_pid, window_process_id],
+                "processes": {},
+                "chains": {},
+            }
+            relationship = {
+                "classification": "diagnostics_failed",
+                "launch_pid": launched_pid,
+                "window_pid": window_process_id,
+                "ownership_confirmed": False,
+            }
+
+        return {
+            "read_only": True,
+            "launch_requested_executable_path": self._launch_executable_path,
+            "launched_pid": launched_pid,
+            "window_pid": window_process_id,
+            "window_hwnd": window_hwnd,
+            "window_class": window_class,
+            "launch_process_at_start": self._launch_process_diagnostics,
+            "current_process_snapshot": current_snapshot,
+            "relationship": relationship,
+            "ownership_confirmed": False,
+            "input_sent": False,
+        }
 
     def _guard(self) -> None:
         if self.cancellation.cancelled:

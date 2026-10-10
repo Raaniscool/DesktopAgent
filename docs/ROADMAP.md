@@ -1,14 +1,15 @@
 # Roadmap
 
 1. **Basic agent — implemented, Windows acceptance pending:** local Ollama model
-   check, structured controlled actions, Notepad demo, per-action approvals,
+   check, native Ollama function calls, Notepad demo, per-action approvals,
    validation and isolated tests. No claim of real desktop acceptance yet.
 2. **Reliable Windows interaction — future:** broader application lifecycle,
    improve existing minimal pywinauto integration, window/control inspection,
    layout-independent typing, supported Notepad versions and bounded UIA workers.
 3. **Visual awareness — future:** screenshots, UI element identification, state
    verification. Check `/api/show` model capabilities and evaluate a compatible
-   local vision model before adding images; Qwen3:4B is not assumed vision-capable.
+   local vision model before adding images; the default Qwen3:1.7B is not assumed
+   vision-capable.
 4. **Multi-step execution — future:** richer planning/history, ambiguity handling,
    bounded recovery, checkpoints and task-completion evaluation. The present loop
    has a small history and stops on failures rather than recovering automatically.

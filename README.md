@@ -1,9 +1,10 @@
 # DesktopAgent
 
 A local-first Windows computer-control **CLI prototype**. Python plans with local
-Ollama (`qwen3:4b` by default), validates a tiny tool allowlist, asks approval for
-**every** action, and records execution evidence. No paid API, GUI, screenshots,
-shell tool, file tool, or browser automation is included.
+Ollama (`qwen3:1.7b` by default) using Ollama's native function-tool interface,
+validates a tiny tool allowlist, asks approval for **every** action, and records
+execution evidence. No paid API, GUI, screenshots, shell tool, file tool, or browser
+automation is included.
 
 ## Status and repository
 
@@ -15,20 +16,17 @@ integrated through authorized pull requests; there is no alternate project home.
 
 ## Windows setup (PowerShell, Python 3.11+)
 
-First ensure your checkout contains `agent.py` and `requirements.txt`. A clone of
-README-only `main` cannot run the prototype: the implementation must first be
-published and merged into `main` with authorization. After that integration, run
-these commands from `C:\Users\Raani\DesktopAgent` (or your actual clone path):
+Run setup from the root of your existing clone (replace the example path with
+your actual clone path), and confirm the implementation files are present:
 
 ```powershell
-git switch main
-git pull --ff-only origin main
+Set-Location C:\Users\Raani\DesktopAgent
 Test-Path .\agent.py
 Test-Path .\requirements.txt
 ```
 
-Both checks must return `True`. Do not continue if the project files are missing.
-Git commands must run **inside the clone**, not its parent directory.
+Both checks must return `True`. Stop if either file is missing; do not try to run
+the prototype from a README-only checkout.
 
 Check that Python 3.11 is available:
 
@@ -57,7 +55,7 @@ not required, and there is no need to change PowerShell's execution policy.
 Install Ollama for Windows from https://ollama.com and start it. Then:
 
 ```powershell
-ollama pull qwen3:4b
+ollama pull qwen3:1.7b
 ollama list
 .\.venv\Scripts\python.exe agent.py --check
 .\.venv\Scripts\python.exe -m pytest -q
@@ -66,9 +64,10 @@ ollama list
 
 If the service isn't running, start the Ollama app or `ollama serve`. `--check`
 checks service/model availability without desktop imports/actions. Model download
-is your explicit setup action; the agent never installs anything itself. Use a
-current Ollama version supporting structured JSON output and `think: false`.
-Qwen3:4B is used for **text-only** reasoning; no image capability is assumed or used.
+is your explicit setup action; the agent never installs anything itself. Use an
+Ollama version that supports native function tools on `/api/chat` and the Qwen3
+model family. The default `qwen3:1.7b` handles text/tool selection only in this
+prototype: no images are sent, and no vision capability is assumed.
 
 Type `yes` separately for each proposed action. Anything else cancels approval.
 Inspect the proposed text before approving. Ctrl+C cancels; moving the pointer to
@@ -118,7 +117,7 @@ Caps Lock off, and select the standard **US English keyboard layout**.
 Environment variables (PowerShell examples):
 
 ```powershell
-$env:DESKTOPAGENT_MODEL = "qwen3:4b"
+$env:DESKTOPAGENT_MODEL = "qwen3:1.7b"
 $env:DESKTOPAGENT_OLLAMA_URL = "http://127.0.0.1:11434"
 $env:DESKTOPAGENT_MAX_STEPS = "8"
 $env:DESKTOPAGENT_TIMEOUT = "90"
@@ -126,10 +125,11 @@ $env:DESKTOPAGENT_TIMEOUT = "90"
 
 Only plain loopback HTTP URLs are accepted; proxies/redirects are disabled.
 Timeouts and loop sizes are validated. Approvals cannot be disabled. Other
-validated defaults live in `config.py`. Logs go to stderr, include tool names,
-statuses and exception classes, and exclude typed text/document contents. Tasks
-and proposed text are sent to your local model; never provide secrets. Interactive
-task entry (omit `--task`) avoids putting task text in shell history.
+validated defaults live in `config.py`. Logs go to stderr and include per-step
+model-call latency/response type, tool names, statuses and exception classes; task
+text, tool arguments and document contents are excluded. Tasks and proposed text
+are still sent to your local model; never provide secrets. Interactive task entry
+(omit `--task`) avoids putting task text in shell history.
 
 See [Architecture](docs/ARCHITECTURE.md), [Safety](docs/SAFETY.md),
 [Roadmap](docs/ROADMAP.md), and [Testing](docs/TESTING.md).

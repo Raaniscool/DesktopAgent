@@ -32,8 +32,24 @@ def test_notepad_workflow_mocked(registry, controller):
     controller.open_notepad.assert_called_once_with()
     controller.type_text.assert_called_once_with(text="Hello from DesktopAgent.")
     messages = client.next_action.call_args.args[0]
-    assert any('"tool_result"' in message["content"] for message in messages)
+    assert any(message.get("role") == "assistant" and message.get("tool_calls") for message in messages)
+    assert any(message.get("role") == "tool" and '"status": "verified"' in message["content"]
+               for message in messages)
     assert "not independent verification" in outcome.render()
+
+
+def test_model_timing_logs_exclude_task_and_tool_arguments(registry, caplog):
+    sensitive = "private typed marker"
+    agent, _ = make_agent(registry, [tool("type_text", text=sensitive), finish()])
+    caplog.set_level("INFO")
+
+    outcome = agent.run("type " + sensitive)
+
+    assert outcome.reason == "model_finished"
+    assert "planner_step=1 response=tool_call elapsed_ms=" in caplog.text
+    assert "planner_step=2 response=final elapsed_ms=" in caplog.text
+    assert "tool=type_text status=verified" in caplog.text
+    assert sensitive not in caplog.text
 
 
 def test_step_limit(registry, controller):

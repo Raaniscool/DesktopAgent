@@ -57,19 +57,32 @@ class OllamaClient:
             raise ModelError(f"Model {wanted!r} is not installed. Pull the configured model with "
                              f"'ollama pull {wanted}' and retry")
 
-    def next_action(self, messages: list[dict], schema: dict) -> dict:
+    def next_action(self, messages: list[dict], tools: list[dict]) -> dict:
+        """Request one native Ollama function call or a plain-text final response."""
+        native_tools = [{"type": "function", "function": tool} for tool in tools]
         result = self._request("/api/chat", {
             "model": self.config.model, "messages": messages, "stream": False,
-            "think": False, "format": schema,
+            "think": False, "tools": native_tools,
             "options": {"temperature": 0, "num_predict": 1024},
         })
         message = result.get("message")
-        if not isinstance(message, dict) or not isinstance(message.get("content"), str):
-            raise ModelError("Ollama response has no assistant content")
-        try:
-            action = json.loads(message["content"])
-        except (ValueError, TypeError):
-            raise ModelError("Model did not return a valid JSON action; no action executed") from None
-        if not isinstance(action, dict):
-            raise ModelError("Model action must be an object")
-        return action
+        if not isinstance(message, dict):
+            raise ModelError("Ollama response has no assistant message")
+
+        tool_calls = message.get("tool_calls", [])
+        if not isinstance(tool_calls, list):
+            raise ModelError("Ollama returned malformed tool calls; no action executed")
+        if len(tool_calls) > 1:
+            raise ModelError("Model requested multiple tools at once; no action executed")
+        if tool_calls:
+            call = tool_calls[0]
+            function = call.get("function") if isinstance(call, dict) else None
+            if (not isinstance(function, dict) or not isinstance(function.get("name"), str)
+                    or type(function.get("arguments")) is not dict):
+                raise ModelError("Ollama returned a malformed function call; no action executed")
+            return {"kind": "tool", "tool": function["name"], "arguments": function["arguments"]}
+
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise ModelError("Ollama returned neither a tool call nor a final response")
+        return {"kind": "final", "message": content}

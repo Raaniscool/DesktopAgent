@@ -87,9 +87,10 @@ Caps Lock off, and select the standard **US English keyboard layout**.
 6. On a disposable blank document, test Ctrl+C, fail-safe corner interruption,
    focus loss, and an unsupported keyboard layout. Input must stop/refuse; partial
    input can remain. Record Windows/Notepad/Ollama versions and actual outcomes.
-7. If the model produces invalid JSON/actions, the agent should stop without
-   executing the invalid proposal. If Notepad's UIA editor cannot be identified,
-   it should refuse input. Report that limitation rather than disabling guards.
+7. If Ollama returns malformed native tool-call data, multiple calls, an unknown
+   tool or invalid arguments, the agent should stop without executing the proposal.
+   If Notepad's UIA editor cannot be identified, it should refuse input. Report
+   that limitation rather than disabling guards.
 
 ## Scope and limitations
 

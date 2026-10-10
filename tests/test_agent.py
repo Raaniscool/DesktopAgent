@@ -5,7 +5,7 @@ from agent import Agent
 from config import Config
 from observation import ToolResult
 from ollama_client import ModelError
-from safety import Cancellation
+from safety import Cancellation, ConsoleApproval
 
 
 def tool(name, **arguments):
@@ -117,6 +117,24 @@ def test_cancelled_proposal_is_discarded(registry, controller):
     client.next_action.side_effect = propose
     assert agent.run("task").reason == "cancelled"
     assert not controller.mock_calls
+
+
+def test_ctrl_c_during_approval_cancels_without_replanning(registry, controller):
+    def interrupt(_):
+        raise KeyboardInterrupt
+
+    client = Mock()
+    client.next_action.return_value = tool("open_notepad")
+    cancellation = Cancellation()
+    approval = ConsoleApproval(read=interrupt, write=lambda _: None)
+    agent = Agent(Config(), client, registry, approval, cancellation)
+
+    outcome = agent.run("Open Notepad")
+
+    assert outcome.reason == "cancelled"
+    assert cancellation.cancelled
+    client.next_action.assert_called_once()
+    controller.open_notepad.assert_not_called()
 
 
 @pytest.mark.parametrize("task", ["", " ", "x" * 4001, None])

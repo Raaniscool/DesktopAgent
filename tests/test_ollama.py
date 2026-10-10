@@ -1,10 +1,13 @@
+import http.client
 import json
 from unittest.mock import Mock
 import urllib.error
 import pytest
 
+from agent import Agent
 from config import Config
 from ollama_client import ModelError, OllamaClient, _NoRedirect
+from safety import Cancellation
 
 
 def client_with_response(payload):
@@ -39,6 +42,31 @@ def test_service_unavailable():
     client = client_with_response({})
     client._opener.open.side_effect = urllib.error.URLError("refused")
     with pytest.raises(ModelError, match="ollama serve"):
+        client.check_model()
+
+
+def test_request_timeout_is_reported_clearly():
+    client = client_with_response({})
+    client._opener.open.side_effect = TimeoutError("socket timed out")
+    with pytest.raises(ModelError, match="may have timed out"):
+        client.check_model()
+
+
+def test_http_error_is_not_misreported_as_connection_failure():
+    client = client_with_response({})
+    client._opener.open.side_effect = urllib.error.HTTPError(
+        "http://127.0.0.1:11434/api/tags", 404, "Not Found", {}, None
+    )
+    with pytest.raises(ModelError, match="HTTP 404") as error:
+        client.check_model()
+    assert "Cannot reach" not in str(error.value)
+
+
+def test_incomplete_http_response_is_reported_as_model_error():
+    client = client_with_response({})
+    response = client._opener.open.return_value.__enter__.return_value
+    response.read.side_effect = http.client.IncompleteRead(b'{"models":', 1)
+    with pytest.raises(ModelError, match="incomplete or malformed HTTP response"):
         client.check_model()
 
 
@@ -98,6 +126,35 @@ def test_multiple_tool_calls_are_rejected_before_execution():
     client = client_with_response({"message": {"content": "", "tool_calls": [call, call]}})
     with pytest.raises(ModelError, match="multiple tools"):
         client.next_action([], [])
+
+
+def test_agent_never_executes_multiple_native_tool_calls(registry, controller):
+    call = {"function": {"name": "open_notepad", "arguments": {}}}
+    client = client_with_response({"message": {"content": "", "tool_calls": [call, call]}})
+    client.check_model = Mock()
+    approve = Mock(return_value=True)
+
+    outcome = Agent(Config(), client, registry, approve, Cancellation()).run("Open Notepad")
+
+    assert outcome.reason == "model_error"
+    approve.assert_not_called()
+    assert not controller.mock_calls
+
+
+@pytest.mark.parametrize("function", [
+    {"name": "run_shell", "arguments": {"command": "dir"}},
+    {"name": "type_text", "arguments": {"text": "safe", "extra": True}},
+])
+def test_agent_rejects_native_unknown_tools_and_extra_arguments(registry, controller, function):
+    client = client_with_response({"message": {"content": "", "tool_calls": [{"function": function}]}})
+    client.check_model = Mock()
+    approve = Mock(return_value=True)
+
+    outcome = Agent(Config(), client, registry, approve, Cancellation()).run("Do the task")
+
+    assert outcome.reason == "invalid_action"
+    approve.assert_not_called()
+    assert not controller.mock_calls
 
 
 def test_redirects_refused():

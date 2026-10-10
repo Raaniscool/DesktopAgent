@@ -1,4 +1,5 @@
 """Bounded stdlib HTTP client for a local Ollama service (no cloud fallback)."""
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -40,9 +41,14 @@ class OllamaClient:
             return result
         except ModelError:
             raise
+        except urllib.error.HTTPError as exc:
+            raise ModelError(f"Local Ollama responded with HTTP {exc.code}; verify the service URL, "
+                             "configured model, and support for native tool calls") from None
         except (urllib.error.URLError, TimeoutError, OSError):
             raise ModelError("Cannot reach local Ollama. Install/start Ollama, run 'ollama serve' "
                              "if needed, and check DESKTOPAGENT_OLLAMA_URL. The request may have timed out") from None
+        except http.client.HTTPException:
+            raise ModelError("Ollama returned an incomplete or malformed HTTP response") from None
         except (ValueError, UnicodeError):
             raise ModelError("Ollama returned malformed JSON") from None
 

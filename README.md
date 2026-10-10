@@ -10,9 +10,8 @@ shell tool, file tool, or browser automation is included.
 Milestone 1 is implemented with automated mocked tests. **Real Windows Notepad and
 real Ollama/model integration still require the manual acceptance test below.**
 Do not treat mocked test results as evidence that your desktop workflow works.
-Changes live in the existing canonical repository on `arena/4f30143d-desktopagent`;
-they have **not been pushed or integrated into `main`**. Integration requires an
-authorized review/merge into canonical `main`; there is no alternate project home.
+The canonical home is this repository's `main` branch. Development branches are
+integrated through authorized pull requests; there is no alternate project home.
 
 ## Windows setup (PowerShell, Python 3.11+)
 

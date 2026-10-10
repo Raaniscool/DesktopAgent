@@ -21,4 +21,4 @@
    optional local vision/additional models and real-task evaluation benchmarks.
 
 All permanent work belongs in this repository's canonical `main` branch through
-an authorized integration. Current session changes are not yet merged into main.
+an authorized integration; development branches are not alternate project homes.

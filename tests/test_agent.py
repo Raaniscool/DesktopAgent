@@ -39,23 +39,25 @@ def test_notepad_workflow_mocked(registry, controller):
     assert "not independent verification" in outcome.render()
 
 
-def test_direct_request_text_mismatch_is_rejected_before_approval(registry, controller):
+def test_direct_request_text_mismatch_is_corrected_before_approval(registry, controller, caplog):
     client = Mock()
     client.next_action.side_effect = [
         tool("open_notepad"),
         tool("type_text", text="Hello from DesktopAgent"),
+        finish(),
     ]
     approve = Mock(return_value=True)
     agent = Agent(Config(), client, registry, approve, Cancellation())
+    caplog.set_level("WARNING")
 
     outcome = agent.run("Open Notepad and type Hello from DesktopAgent.")
 
-    assert outcome.reason == "invalid_action"
-    assert "does not exactly match" in outcome.message
-    assert "no typing action was executed" in outcome.message
-    assert approve.call_count == 1
+    assert outcome.reason == "model_finished"
+    assert approve.call_count == 2
+    assert approve.call_args.args == ("type_text", {"text": "Hello from DesktopAgent."})
     controller.open_notepad.assert_called_once_with()
-    controller.type_text.assert_not_called()
+    controller.type_text.assert_called_once_with(text="Hello from DesktopAgent.")
+    assert "using exact task text for human approval" in caplog.text
 
 
 def test_model_timing_logs_exclude_task_and_tool_arguments(registry, caplog):

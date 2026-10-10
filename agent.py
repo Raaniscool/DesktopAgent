@@ -147,10 +147,11 @@ class Agent:
                 self.registry.validate(name, arguments)
                 if (name == "type_text" and direct_requested_text is not None
                         and arguments["text"] != direct_requested_text):
-                    raise ValidationError(
-                        "Proposed type_text does not exactly match the text in the direct task request; "
-                        "no typing action was executed"
+                    logger.warning(
+                        "type_text proposal differed from explicit task text; "
+                        "using exact task text for human approval"
                     )
+                    arguments = {**arguments, "text": direct_requested_text}
                 fingerprint = json.dumps([name, arguments], sort_keys=True)
                 if fingerprint in seen:
                     return AgentOutcome("repeated_action", "Identical action refused to prevent duplicate input", history)

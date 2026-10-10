@@ -103,9 +103,9 @@ Caps Lock off, and select the standard **US English keyboard layout**.
 - `type_text`: printable ASCII plus newlines, 1–1000 characters by default. Appends
   to the **identified Notepad editor**, not arbitrary foreground applications.
   This deliberate scope restriction avoids typing into the approval terminal. For
-  the exact direct task form `Open Notepad and type <text>`, the proposed text is
-  checked against the task suffix before approval; a mismatch stops without typing.
-  For other task forms, inspect the full proposed text before approving.
+  the exact direct task form `Open Notepad and type <text>`, a mismatched model
+  proposal is replaced by the task suffix **before** the usual per-action approval.
+  The corrected text is shown for inspection; other task forms require the same manual check.
 - `press_key`: only enter/backspace/arrow keys. Its effect is **unverified**, so the
   agent stops further actions after it. No hotkey/save/submit tools are exposed.
 - Typing compares before/after text locally; document contents are not sent back

@@ -116,11 +116,31 @@ class WindowsController:
         if self._user32.GetKeyboardLayout(thread_id) & 0xFFFFFFFF != 0x04090409:
             raise DesktopGuardError("Select the standard US English keyboard layout first")
 
+    def _wait_for_editor_focus(self, timeout: float = 1.0) -> None:
+        """Poll read-only focus state after one activation attempt; never repeat input."""
+        deadline = time.monotonic() + timeout
+        while True:
+            if self.cancellation.cancelled:
+                raise InterruptedError("Cancelled")
+            self._pg.failSafeCheck()
+            if self._user32.GetForegroundWindow() == self._window.handle:
+                focused = self._uia.iuia.GetFocusedElement()
+                if tuple(focused.GetRuntimeId()) == self._runtime_id:
+                    return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise DesktopGuardError("Notepad did not become the foreground editor")
+            time.sleep(min(0.05, remaining))
+
     def _focus(self) -> None:
         self._load()
-        if self._editor is None:
+        if self._window is None or self._editor is None:
             raise DesktopGuardError("No owned Notepad editor")
+        # First activate the top-level Notepad window, then focus its identified editor.
+        # Focus polling is read-only; activation is attempted exactly once.
+        self._window.set_focus()
         self._editor.set_focus()
+        self._wait_for_editor_focus()
         self._guard()
 
     def type_text(self, text: str) -> ToolResult:

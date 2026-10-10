@@ -42,6 +42,46 @@ def test_focus_loss_stops_before_input_with_safe_stage_message():
     controller._pg.write.assert_not_called()
 
 
+def test_focus_activates_top_level_window_before_editor_once():
+    controller = WindowsController(1, Cancellation())
+    controller._load = Mock()
+    controller._window = Mock()
+    controller._editor = Mock()
+    controller._wait_for_editor_focus = Mock()
+    controller._guard = Mock()
+    order = []
+    controller._window.set_focus.side_effect = lambda: order.append("window")
+    controller._editor.set_focus.side_effect = lambda: order.append("editor")
+    controller._wait_for_editor_focus.side_effect = lambda: order.append("wait")
+    controller._guard.side_effect = lambda: order.append("guard")
+
+    controller._focus()
+
+    assert order == ["window", "editor", "wait", "guard"]
+    controller._window.set_focus.assert_called_once_with()
+    controller._editor.set_focus.assert_called_once_with()
+
+
+def test_editor_focus_wait_is_bounded_and_does_not_send_input(monkeypatch):
+    controller = WindowsController(1, Cancellation())
+    controller._window = Mock(handle=123)
+    controller._runtime_id = (7, 8)
+    controller._pg = Mock()
+    controller._user32 = Mock()
+    controller._user32.GetForegroundWindow.return_value = 0
+    ticks = iter((0.0, 0.5, 1.0))
+    monkeypatch.setattr("windows_controller.time.monotonic", lambda: next(ticks))
+    sleep = Mock()
+    monkeypatch.setattr("windows_controller.time.sleep", sleep)
+
+    with pytest.raises(DesktopGuardError, match="did not become the foreground editor"):
+        controller._wait_for_editor_focus(timeout=1.0)
+
+    assert controller._user32.GetForegroundWindow.call_count == 2
+    sleep.assert_called_once_with(0.05)
+    assert controller._pg.failSafeCheck.call_count == 2
+
+
 def test_known_desktop_guard_reason_is_reported_safely():
     controller = adapter()
     controller._guard.side_effect = DesktopGuardError("Turn Caps Lock off first")

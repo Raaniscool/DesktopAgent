@@ -83,8 +83,9 @@ Caps Lock off, and select the standard **US English keyboard layout**.
    windows first. Disable Notepad session restore (start a new session) if needed.
 2. Run `--check`; expect the model to be installed and the local service reachable.
 3. Run the example command. Expect a proposal for `open_notepad`, then `type_text`.
-4. Approve each individually. Confirm a single blank editor opens and the exact
-   text `Hello from DesktopAgent.` appears. Expect both records to be `verified`.
+4. Approve each individually. Confirm a single blank editor opens, `type_text`
+   brings its identified editor to the foreground, and the exact text `Hello from
+   DesktopAgent.` appears. Expect both records to be `verified`.
 5. Repeat with approval declined: no declined action should execute.
 6. On a disposable blank document, test Ctrl+C, fail-safe corner interruption,
    focus loss, and an unsupported keyboard layout. Input must stop/refuse; partial

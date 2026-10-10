@@ -69,9 +69,11 @@ Ollama version that supports native function tools on `/api/chat` and the Qwen3
 model family. The default `qwen3:1.7b` handles text/tool selection only in this
 prototype: no images are sent, and no vision capability is assumed.
 
-Type `yes` separately for each proposed action. Anything else cancels approval.
-Inspect the proposed text before approving. Ctrl+C cancels; moving the pointer to
-a PyAutoGUI fail-safe corner interrupts input. Do not touch keyboard/mouse or
+Type `yes` separately for each proposed action. Anything else denies that action.
+Check that the displayed `type_text` argument contains the entire intended text,
+including case and punctuation; deny it if it is shortened or changed. The model can
+still make mistakes. Ctrl+C cancels; moving the pointer to a PyAutoGUI fail-safe
+corner interrupts input. Do not touch keyboard/mouse or
 change focus while an approved action is executing. Release modifier keys, turn
 Caps Lock off, and select the standard **US English keyboard layout**.
 
@@ -130,9 +132,10 @@ Only plain loopback HTTP URLs are accepted; proxies/redirects are disabled.
 Timeouts and loop sizes are validated. Approvals cannot be disabled. Other
 validated defaults live in `config.py`. Logs go to stderr and include per-step
 model-call latency/response type, tool names, statuses and exception classes; task
-text, tool arguments and document contents are excluded. Tasks and proposed text
-are still sent to your local model; never provide secrets. Interactive task entry
-(omit `--task`) avoids putting task text in shell history.
+text, tool arguments and document contents are excluded. Typing failures return
+safe stage-specific guidance rather than raw Windows exception text. Tasks and
+proposed text are still sent to your local model; never provide secrets. Interactive
+task entry (omit `--task`) avoids putting task text in shell history.
 
 See [Architecture](docs/ARCHITECTURE.md), [Safety](docs/SAFETY.md),
 [Roadmap](docs/ROADMAP.md), and [Testing](docs/TESTING.md).

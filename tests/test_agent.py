@@ -32,6 +32,7 @@ def test_notepad_workflow_mocked(registry, controller):
     controller.open_notepad.assert_called_once_with()
     controller.type_text.assert_called_once_with(text="Hello from DesktopAgent.")
     messages = client.next_action.call_args.args[0]
+    assert "copy the complete requested text verbatim" in messages[0]["content"]
     assert any(message.get("role") == "assistant" and message.get("tool_calls") for message in messages)
     assert any(message.get("role") == "tool" and '"status": "verified"' in message["content"]
                for message in messages)

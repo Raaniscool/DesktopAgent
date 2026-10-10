@@ -1,8 +1,10 @@
 # Safety model
 
 Every computer-control call requires fresh explicit approval. There is no
-unattended mode. Only a fixed Notepad launch, bounded ASCII/newline typing and six
-keys exist. Model proposals are data, not executable code. No arbitrary shell,
+unattended mode. Inspect the full displayed `type_text` argument and deny it if it
+does not exactly match the intended text; the model can still shorten or alter it.
+Only a fixed Notepad launch, bounded ASCII/newline typing and six keys exist.
+Model proposals are data, not executable code. No arbitrary shell,
 Python, paths, browser, clipboard, screenshots, account operations or downloads.
 
 Notepad must start blank with a single recognized editor, and no existing Notepad

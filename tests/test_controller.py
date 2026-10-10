@@ -2,7 +2,7 @@
 from unittest.mock import Mock
 import pytest
 from safety import Cancellation
-from windows_controller import WindowsController
+from windows_controller import DesktopGuardError, WindowsController
 
 
 def adapter():
@@ -29,13 +29,66 @@ def test_typing_mismatch_is_failure():
     assert controller.type_text("hello").status == "failed"
 
 
-def test_focus_loss_stops_before_input():
+def test_focus_loss_stops_before_input_with_safe_stage_message():
     controller = adapter()
     controller._read = Mock(return_value="")
-    controller._guard.side_effect = RuntimeError("focus lost")
-    with pytest.raises(RuntimeError):
-        controller.type_text("hello")
+    controller._guard.side_effect = RuntimeError("private window text")
+
+    result = controller.type_text("hello")
+
+    assert result.status == "failed"
+    assert "Could not confirm focus or move the caret" in result.message
+    assert "private window text" not in result.message
     controller._pg.write.assert_not_called()
+
+
+def test_known_desktop_guard_reason_is_reported_safely():
+    controller = adapter()
+    controller._guard.side_effect = DesktopGuardError("Turn Caps Lock off first")
+
+    result = controller.type_text("hello")
+
+    assert result.status == "failed"
+    assert "Turn Caps Lock off first" in result.message
+    assert "no text was sent" in result.message
+    controller._pg.write.assert_not_called()
+
+
+def test_pretyping_focus_failure_is_safe_and_sends_no_text():
+    controller = adapter()
+    controller._focus.side_effect = RuntimeError("private window text")
+
+    result = controller.type_text("hello")
+
+    assert result.status == "failed"
+    assert "Could not focus" in result.message and "no text was sent" in result.message
+    assert "private window text" not in result.message
+    controller._pg.write.assert_not_called()
+
+
+def test_keyboard_failure_reports_possible_partial_input_without_details():
+    controller = adapter()
+    controller._read = Mock(return_value="")
+    controller._pg.write.side_effect = RuntimeError("sensitive platform detail")
+
+    result = controller.type_text("hello")
+
+    assert result.status == "failed"
+    assert "text may be partial" in result.message
+    assert "sensitive platform detail" not in result.message
+    controller._pg.write.assert_called_once_with("h")
+
+
+def test_final_verification_error_does_not_leak_platform_details():
+    controller = adapter()
+    controller._read = Mock(side_effect=["", RuntimeError("sensitive document detail")])
+
+    result = controller.type_text("hello")
+
+    assert result.status == "failed"
+    assert "final Notepad verification failed" in result.message
+    assert "sensitive document detail" not in result.message
+    assert controller._pg.write.call_count == 5
 
 
 @pytest.mark.parametrize("text", ["", "\t", "é", "x" * 1001])

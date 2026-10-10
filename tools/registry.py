@@ -71,8 +71,11 @@ class ToolRegistry:
         # Do not hand the approver the mutable arguments used for execution.
         try:
             approved = approve(name, dict(arguments))
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
             approved = False
+        except KeyboardInterrupt:
+            cancellation.cancel()
+            return ToolResult("cancelled", "Interrupted during approval; no action executed")
         if approved is not True:
             return ToolResult("denied", "Approval declined; no action executed")
         if cancellation.cancelled:

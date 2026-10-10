@@ -6,6 +6,11 @@ from safety import Cancellation, ConsoleApproval
 from tools.registry import ValidationError
 
 
+def test_type_text_schema_emphasizes_verbatim_content(registry):
+    schema = next(item for item in registry.schemas() if item["name"] == "type_text")
+    assert "exact complete text requested by the user" in schema["description"]
+
+
 @pytest.mark.parametrize("name,args", [
     ("shell", {"command": "dir"}), ([], {}),
     ("open_notepad", {"extra": True}), ("open_notepad", []),

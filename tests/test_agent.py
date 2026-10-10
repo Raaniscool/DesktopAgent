@@ -4,8 +4,8 @@ import pytest
 from agent import Agent
 from config import Config
 from observation import ToolResult
-from ollama_client import ModelError
-from safety import Cancellation
+from ollama_client import ModelError, MultipleToolCallsError
+from safety import Cancellation, ConsoleApproval
 
 
 def tool(name, **arguments):
@@ -32,8 +32,46 @@ def test_notepad_workflow_mocked(registry, controller):
     controller.open_notepad.assert_called_once_with()
     controller.type_text.assert_called_once_with(text="Hello from DesktopAgent.")
     messages = client.next_action.call_args.args[0]
-    assert any('"tool_result"' in message["content"] for message in messages)
+    assert "copy the complete requested text verbatim" in messages[0]["content"]
+    assert any(message.get("role") == "assistant" and message.get("tool_calls") for message in messages)
+    assert any(message.get("role") == "tool" and '"status": "verified"' in message["content"]
+               for message in messages)
     assert "not independent verification" in outcome.render()
+
+
+def test_direct_request_text_mismatch_is_corrected_before_approval(registry, controller, caplog):
+    client = Mock()
+    client.next_action.side_effect = [
+        tool("open_notepad"),
+        tool("type_text", text="Hello from DesktopAgent"),
+        finish(),
+    ]
+    approve = Mock(return_value=True)
+    agent = Agent(Config(), client, registry, approve, Cancellation())
+    caplog.set_level("WARNING")
+
+    outcome = agent.run("Open Notepad and type Hello from DesktopAgent.")
+
+    assert outcome.reason == "model_finished"
+    assert approve.call_count == 2
+    assert approve.call_args.args == ("type_text", {"text": "Hello from DesktopAgent."})
+    controller.open_notepad.assert_called_once_with()
+    controller.type_text.assert_called_once_with(text="Hello from DesktopAgent.")
+    assert "using exact task text for human approval" in caplog.text
+
+
+def test_model_timing_logs_exclude_task_and_tool_arguments(registry, caplog):
+    sensitive = "private typed marker"
+    agent, _ = make_agent(registry, [tool("type_text", text=sensitive), finish()])
+    caplog.set_level("INFO")
+
+    outcome = agent.run("type " + sensitive)
+
+    assert outcome.reason == "model_finished"
+    assert "planner_step=1 response=tool_call elapsed_ms=" in caplog.text
+    assert "planner_step=2 response=final elapsed_ms=" in caplog.text
+    assert "tool=type_text status=verified" in caplog.text
+    assert sensitive not in caplog.text
 
 
 def test_step_limit(registry, controller):
@@ -48,6 +86,55 @@ def test_repeat_guard(registry, controller):
     agent, _ = make_agent(registry, [tool("type_text", text="x"), tool("type_text", text="x")])
     assert agent.run("repeat").reason == "repeated_action"
     controller.type_text.assert_called_once()
+
+
+def test_multiple_tool_response_is_discarded_and_replanned_once(registry, controller):
+    client = Mock()
+    client.next_action.side_effect = [
+        MultipleToolCallsError("Model requested multiple tools at once"),
+        tool("open_notepad"),
+        finish(),
+    ]
+    approve = Mock(return_value=True)
+    agent = Agent(Config(), client, registry, approve, Cancellation())
+
+    outcome = agent.run("Open Notepad")
+
+    assert outcome.reason == "model_finished"
+    assert client.next_action.call_count == 3
+    retry_messages = client.next_action.call_args_list[1].args[0]
+    assert any(message.get("role") == "user" and
+               "No action from that response was executed" in message.get("content", "")
+               for message in retry_messages)
+    approve.assert_called_once()
+    controller.open_notepad.assert_called_once()
+
+
+def test_repeated_multiple_tool_responses_stop_safely(registry, controller):
+    client = Mock()
+    client.next_action.side_effect = [
+        MultipleToolCallsError("multiple"), MultipleToolCallsError("multiple"), tool("open_notepad")
+    ]
+    approve = Mock(return_value=True)
+    outcome = Agent(Config(), client, registry, approve, Cancellation()).run("Open Notepad")
+
+    assert outcome.reason == "model_error"
+    assert "repeatedly requested multiple tools" in outcome.message
+    assert client.next_action.call_count == 2
+    approve.assert_not_called()
+    assert not controller.mock_calls
+
+
+def test_multiple_tool_response_respects_step_limit(registry, controller):
+    client = Mock()
+    client.next_action.side_effect = [MultipleToolCallsError("multiple"), tool("open_notepad")]
+    approve = Mock(return_value=True)
+    outcome = Agent(Config(max_steps=1), client, registry, approve, Cancellation()).run("Open Notepad")
+
+    assert outcome.reason == "step_limit"
+    assert client.next_action.call_count == 1
+    approve.assert_not_called()
+    assert not controller.mock_calls
 
 
 @pytest.mark.parametrize("status", ["failed", "unverified", "cancelled"])
@@ -101,6 +188,24 @@ def test_cancelled_proposal_is_discarded(registry, controller):
     client.next_action.side_effect = propose
     assert agent.run("task").reason == "cancelled"
     assert not controller.mock_calls
+
+
+def test_ctrl_c_during_approval_cancels_without_replanning(registry, controller):
+    def interrupt(_):
+        raise KeyboardInterrupt
+
+    client = Mock()
+    client.next_action.return_value = tool("open_notepad")
+    cancellation = Cancellation()
+    approval = ConsoleApproval(read=interrupt, write=lambda _: None)
+    agent = Agent(Config(), client, registry, approval, cancellation)
+
+    outcome = agent.run("Open Notepad")
+
+    assert outcome.reason == "cancelled"
+    assert cancellation.cancelled
+    client.next_action.assert_called_once()
+    controller.open_notepad.assert_not_called()
 
 
 @pytest.mark.parametrize("task", ["", " ", "x" * 4001, None])

@@ -30,5 +30,5 @@ class ConsoleApproval:
                    "typing appends at the end of the identified editor. No saving is performed.")
         try:
             return self.read("Approve this one action? Type yes; anything else cancels: ").strip().lower() == "yes"
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
             return False

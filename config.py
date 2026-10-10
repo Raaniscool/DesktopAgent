@@ -4,9 +4,12 @@ import os
 from urllib.parse import urlparse
 
 
+DEFAULT_MODEL = "qwen3:1.7b"
+
+
 @dataclass(frozen=True)
 class Config:
-    model: str = "qwen3:4b"
+    model: str = DEFAULT_MODEL
     ollama_url: str = "http://127.0.0.1:11434"
     max_steps: int = 8
     request_timeout: float = 90.0
@@ -34,7 +37,7 @@ class Config:
     @classmethod
     def from_env(cls) -> "Config":
         return cls(
-            model=os.getenv("DESKTOPAGENT_MODEL", "qwen3:4b"),
+            model=os.getenv("DESKTOPAGENT_MODEL", DEFAULT_MODEL),
             ollama_url=os.getenv("DESKTOPAGENT_OLLAMA_URL", "http://127.0.0.1:11434"),
             max_steps=int(os.getenv("DESKTOPAGENT_MAX_STEPS", "8")),
             request_timeout=float(os.getenv("DESKTOPAGENT_TIMEOUT", "90")),

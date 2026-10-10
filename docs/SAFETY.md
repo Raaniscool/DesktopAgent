@@ -9,9 +9,13 @@ Python, paths, browser, clipboard, screenshots, account operations or downloads.
 
 Notepad must start blank with a single recognized editor, and no existing Notepad
 window may be present. The visible window must belong to the launched PID or be a
-verified direct child of that exact Popen process (matching process-handle PID/image,
-parent PID, and creation/exit-time order); indirect or incomplete relationships are
-refused. Before typing, the controller restores its identified editor focus and
+verified direct child of that exact Popen process. In the child case, the Popen
+handle's PID and creation time must match the launch-time sample and mismatch-time
+sample, its image must match the window, its PID must be the direct parent, and it
+must have been alive when the child was created. The launch-time image path is used
+only if the later handle query cannot retrieve it and the same-handle identity matches.
+Indirect or incomplete relationships are refused. Before typing, the controller
+restores its identified editor focus and
 checks foreground window, UIA runtime identity, keyboard layout,
 Caps Lock and held modifiers. Typing appends at the end instead of replacing a
 selection. Checks repeat per character; PyAutoGUI FAILSAFE stays enabled. An

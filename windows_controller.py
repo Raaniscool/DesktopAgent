@@ -36,6 +36,7 @@ class WindowsController:
         self._launched_process_id = None
         self._launch_executable_path = None
         self._launch_process_diagnostics = None
+        self._launch_process_handle_identity = None
         self._last_process_relationship_diagnostics = None
         self._window_ownership_basis = None
         self._pg = None
@@ -94,6 +95,7 @@ class WindowsController:
         self._launched_process_id = None
         self._launch_executable_path = None
         self._launch_process_diagnostics = None
+        self._launch_process_handle_identity = None
         self._last_process_relationship_diagnostics = None
         self._window_ownership_basis = None
         existing = self._desktop.windows(class_name="Notepad")
@@ -107,6 +109,16 @@ class WindowsController:
         self._launched_process_id = process.pid
         logger.debug("desktop_stage=window_discovery status=launch_requested executable=notepad.exe "
                      "launched_process_id=%s", self._launched_process_id)
+        try:
+            process_handle = getattr(process, "_handle", None)
+            self._launch_process_handle_identity = capture_process_handle_identity(
+                process_handle, self._launched_process_id)
+        except Exception as exc:
+            self._launch_process_handle_identity = {
+                "status": "error",
+                "exception_type": type(exc).__name__,
+                "pid": self._launched_process_id,
+            }
         if self.process_diagnostics:
             try:
                 self._launch_process_diagnostics = capture_process_hierarchy((self._launched_process_id,))
@@ -231,7 +243,8 @@ class WindowsController:
                 launched_pid, window_process_id,
                 self._launch_process_diagnostics or {}, current_snapshot)
             ownership = verify_direct_launch_child(
-                launched_pid, window_process_id, launch_handle_identity, current_snapshot)
+                launched_pid, window_process_id, launch_handle_identity, current_snapshot,
+                self._launch_process_handle_identity)
         except Exception as exc:
             relationship = {
                 "classification": "diagnostics_failed",
@@ -253,6 +266,7 @@ class WindowsController:
             "window_hwnd": window_hwnd,
             "window_class": window_class,
             "launch_process_at_start": self._launch_process_diagnostics,
+            "launch_process_handle_at_start": self._launch_process_handle_identity,
             "launch_process_handle_at_mismatch": launch_handle_identity,
             "current_process_snapshot": current_snapshot,
             "relationship": relationship,

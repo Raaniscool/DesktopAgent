@@ -38,35 +38,41 @@ foreground API outcomes, UIA focus-match booleans, input-call counts and verific
 counts. If launch and window PIDs differ, the test reports the Popen-handle
 identity/lifetime, executable image, creation/exit timestamps, HWND/class and bounded
 parent chains. A different PID is accepted only when the window process is a **direct
-child** of the Popen process, the Popen handle still identifies the launched PID, the
-image paths match, and the parent was alive at the child's creation time. Missing or
-contradictory evidence fails closed before editor traversal. The accepted window must
-still contain one blank accessible editor, and typing still requires separate
-approval. Document contents, window titles and exception messages are not logged.
+child** of the Popen process; the Popen handle's PID and creation time must match the
+launch-time sample; its image path must match the window's; and the parent must have
+been alive when the child was created. If the later `QueryFullProcessImageNameW` call
+cannot read the exited process's image path, the launch-time path is used only after
+the handle PID and creation-time match succeeds. Missing or contradictory evidence
+fails closed before editor traversal. The accepted window must still contain one blank
+accessible editor, and typing still requires separate approval. Document contents,
+window titles and exception messages are not logged.
 `ResourceWarning` messages include source location; the unique test string is
 redacted from warning text. Executable paths may include local account/profile names.
 Inspect the open document before closing it. If the test fails, retain its stage logs
 and do not blindly retry typing.
 
-The latest reported live run launched PID `6424` and found HWND `0x70630` owned by
-PID `1476`. Both process records had the same packaged Notepad image path; PID `1476`
-reported parent PID `6424` and was created about 156 ms after PID `6424`. This is
-strong evidence that the visible Notepad process was spawned by the approved launch,
-not an unrelated pre-existing window. The launch PID had exited by the later process
-snapshot, so the previous diagnostic correctly left the process-instance link
-unconfirmed. The updated guard uses the still-open Popen handle to compare its PID,
-image, creation time and exit time with the child's parent PID and creation time;
-it accepts only if the original launch process was alive when the child was created.
-This run still stopped before editor identification, focus confirmation, or typing;
-the earlier focus timeout remains untested.
+The latest live run launched PID `4252` (created `2026-10-10T22:41:54.873113Z`) and
+found a Notepad window owned by PID `2756`, whose parent PID was `4252`. The child
+was created at `2026-10-10T22:41:55.023259Z`, about 150.146 ms after launch and
+181.320 ms before the launch process exited at `2026-10-10T22:41:55.204579Z`. Both
+process records reported the same packaged Notepad image path:
+`C:\Program Files\WindowsApps\Microsoft.WindowsNotepad_11.2607.14.0_x64__8wekyb3d8bbwe\Notepad\Notepad.exe`.
+The ownership check still stopped safely before editor traversal, focus confirmation,
+or typing because `QueryFullProcessImageNameW` on the exited Popen handle returned
+Win32 error 31, leaving `same_executable_image` incomplete despite the launch-time
+image path and matching Popen PID/creation-time evidence. The local guard now keeps
+that launch-time handle identity and permits its image path as a fallback only if its
+PID and creation time match the same handle at mismatch; the direct-parent, image,
+creation-order, and process-lifetime checks remain. Mocked tests pass, but no post-change
+live Windows run has been made; this does not yet confirm the ownership change or any
+focus/input behavior.
 
 The same run reported `ResourceWarning` from `subprocess.py:1127` with message
-`subprocess 6424 is still running`. This matches CPython's `Popen` finalizer warning
-when no return code has yet been recorded. The warning text alone does not prove the
-process was still alive—the finalizer checks/polls afterward—and the process was
-absent from the later process snapshot. It is a separate process-lifetime issue, not
-evidence about focus or input delivery. The integration script continues to expose
-the warning rather than suppressing it.
+`subprocess 4252 is still running`. The captured exit time shows PID `4252` exited at
+`2026-10-10T22:41:55.204579Z`; the warning alone does not establish that it was still
+running. It is a separate process-lifetime issue, not evidence about focus or input
+delivery. The integration script continues to expose the warning rather than suppressing
+it.
 
 PyAutoGUI's 0.9.54 Windows backend uses `keybd_event` for virtual-key transitions;
 Windows' documented `SendInput` is an alternative injection API, but it also targets

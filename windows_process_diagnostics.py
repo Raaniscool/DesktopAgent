@@ -474,16 +474,17 @@ def verify_direct_launch_child(
         launch_pid: int,
         window_pid: int,
         launch_handle_identity: dict[str, Any],
-        current_snapshot: dict[str, Any]) -> dict[str, Any]:
+        current_snapshot: dict[str, Any],
+        launch_handle_identity_at_start: dict[str, Any] | None = None) -> dict[str, Any]:
     """Confirm only a direct Notepad child whose parent instance is the Popen process.
 
-    A PID link alone is insufficient. The Popen-owned handle must still identify the
-    launched PID, its image must match the visible-window process, creation times must
-    be ordered, and the Popen process must not have exited before the window child.
+    A PID link alone is insufficient. The Popen-owned handle must identify the same
+    PID/creation-time at launch and at mismatch. If querying the exited handle no
+    longer returns its image path, use the launch-time image only after that identity
+    match. The image, direct parent PID, and process lifetime must also agree.
     """
     window = _get_process(current_snapshot, str(window_pid))
-    launch_path = launch_handle_identity.get("image_path")
-    window_path = window.get("image_path") if window else None
+    start_identity = launch_handle_identity_at_start or {}
     launch_creation = _creation_ticks(launch_handle_identity)
     window_creation = _creation_ticks(window) if window else None
     launch_exit_raw = launch_handle_identity.get("exit_time_filetime_100ns")
@@ -493,11 +494,32 @@ def verify_direct_launch_child(
         launch_exit = None
 
     process_handle_pid = launch_handle_identity.get("pid")
+    start_handle_pid = start_identity.get("pid")
+    start_identity_matches = (
+        start_handle_pid == launch_pid
+        and start_identity.get("expected_pid", launch_pid) == launch_pid
+        and process_handle_pid == launch_pid
+        and _same_process_instance(start_identity, launch_handle_identity) is True
+    )
+    image_path_at_mismatch = launch_handle_identity.get("image_path")
+    image_path_at_start = start_identity.get("image_path")
+    if isinstance(image_path_at_mismatch, str):
+        launch_path = image_path_at_mismatch
+        launch_image_source = "popen_handle_at_mismatch"
+    elif start_identity_matches and isinstance(image_path_at_start, str):
+        launch_path = image_path_at_start
+        launch_image_source = "popen_handle_at_start_same_creation_time"
+    else:
+        launch_path = None
+        launch_image_source = None
+
+    window_path = window.get("image_path") if window else None
     checks = {
         "popen_handle_pid_matches_launch": (
             process_handle_pid == launch_pid
             and launch_handle_identity.get("expected_pid", launch_pid) == launch_pid
         ),
+        "popen_handle_matches_start_identity": start_identity_matches,
         "window_process_present": window is not None,
         "window_parent_pid_matches_launch": (
             window.get("parent_pid") == launch_pid if window else False
@@ -511,7 +533,7 @@ def verify_direct_launch_child(
             if launch_creation is not None and window_creation is not None else None
         ),
         "launch_alive_at_window_creation": (
-            launch_exit == 0 or launch_exit is None
+            launch_exit is None
             if launch_handle_identity.get("process_is_running") is True
             else (launch_exit > window_creation
                   if launch_exit is not None and window_creation is not None else None)
@@ -529,6 +551,7 @@ def verify_direct_launch_child(
         "launch_pid": launch_pid,
         "window_pid": window_pid,
         "launch_image_path": launch_path,
+        "launch_image_source": launch_image_source,
         "window_image_path": window_path,
         "window_parent_pid": window.get("parent_pid") if window else None,
         "launch_creation_time_filetime_100ns": (

@@ -108,8 +108,11 @@ Caps Lock off, and select the standard **US English keyboard layout**.
 
 - `open_notepad`: fixed Windows executable; the discovered window must match the
   launched PID or be a verified direct child of that exact Popen process. The child
-  case requires a matching parent PID, executable image, and creation/exit-time
-  evidence from the Popen-owned handle. It must still contain one blank accessible
+  case requires the direct parent PID and matching executable image, plus matching
+  Popen-handle PID/creation-time samples at launch and mismatch and evidence that the
+  launcher was alive when the child was created. If the later handle query cannot read
+  its image path, the launch-time path is used only after that same-handle identity
+  match. It must still contain one blank accessible
   editor. Modern Notepad may restore tabs or have unsupported UIA controls; refusals
   are intentional. Launched windows are not auto-closed on failure/cancellation.
 - `type_text`: printable ASCII plus newlines, 1–1000 characters by default. Appends

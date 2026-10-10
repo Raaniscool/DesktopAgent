@@ -79,16 +79,23 @@ def test_verified_direct_launch_child_is_owned_before_editor_identification(monk
             "99": [window_process, {**launch_parent, "parent_link_status": "creation_time_consistent"}],
         },
     }
-    launch_handle = {
+    launch_handle_at_start = {
         "status": "ok", "pid": 42, "expected_pid": 42,
         "image_path": r"C:\Windows\System32\notepad.exe",
+        "creation_time_filetime_100ns": "100",
+        "exit_time_filetime_100ns": None,
+        "process_is_running": True,
+    }
+    launch_handle_at_mismatch = {
+        "status": "partial", "pid": 42, "expected_pid": 42,
+        "image_path_status": "unavailable", "image_path_winerror": 31,
         "creation_time_filetime_100ns": "100",
         "exit_time_filetime_100ns": "300",
         "process_is_running": False,
     }
     capture = Mock(side_effect=[launch, current])
     monkeypatch.setattr("windows_controller.capture_process_hierarchy", capture)
-    handle_capture = Mock(return_value=launch_handle)
+    handle_capture = Mock(side_effect=[launch_handle_at_start, launch_handle_at_mismatch])
     monkeypatch.setattr("windows_controller.capture_process_handle_identity", handle_capture)
     controller, window, editor = launch_controller_fixture(
         monkeypatch, window_process_id=99, process_diagnostics=True)
@@ -103,11 +110,13 @@ def test_verified_direct_launch_child_is_owned_before_editor_identification(monk
     relationship = controller._last_process_relationship_diagnostics
     assert relationship["relationship"]["classification"] == "window_direct_child_of_launch"
     assert relationship["ownership_verification"]["classification"] == "verified_direct_launch_child"
+    assert relationship["ownership_verification"]["launch_image_source"] == (
+        "popen_handle_at_start_same_creation_time")
     assert relationship["ownership_confirmed"] is True
     assert relationship["input_sent"] is False
     assert "reason=verified_direct_launch_child" in caplog.text
     assert [item.args[0] for item in capture.call_args_list] == [(42,), (42, 99)]
-    handle_capture.assert_called_once_with(55, 42)
+    assert [item.args for item in handle_capture.call_args_list] == [(55, 42), (55, 42)]
 
 
 def test_same_image_unrelated_pid_parent_is_still_rejected(monkeypatch):

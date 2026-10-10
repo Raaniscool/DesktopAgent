@@ -10,7 +10,8 @@
 - `safety.py`: mandatory console approval and cooperative cancellation token.
 - `windows_controller.py`: lazy Windows imports, fixed Notepad launch with a strict
   ownership check (same PID, or a verified direct child with matching Popen-handle
-  identity, image, parent PID, and creation/exit-time ordering), pywinauto UIA
+  PID/creation identity at launch and mismatch, matching image, direct parent PID, and
+  creation/exit-time ordering), pywinauto UIA
   identification/readback, explicit Win32 top-level foreground activation, UIA
   editor focus with bounded read-only confirmation, fail-safe PyAutoGUI input and
   sanitized typing failures. The standalone integration test reports the process

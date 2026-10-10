@@ -31,13 +31,15 @@ def _snapshot(chains):
     }
 
 
-def _launch_handle(exit_time="300", running=False, image_path=r"C:\Windows\System32\notepad.exe"):
+def _launch_handle(
+        exit_time="300", running=False, image_path=r"C:\Windows\System32\notepad.exe",
+        creation_time="100"):
     return {
         "status": "ok",
         "pid": 42,
         "expected_pid": 42,
         "image_path": image_path,
-        "creation_time_filetime_100ns": "100",
+        "creation_time_filetime_100ns": creation_time,
         "exit_time_filetime_100ns": exit_time,
         "process_is_running": running,
     }
@@ -47,18 +49,82 @@ def test_verified_direct_child_requires_same_image_parent_pid_and_live_time_orde
     window = _record(99, 42, r"C:\Windows\System32\notepad.exe", 200)
     current = _snapshot({99: [window]})
 
-    result = verify_direct_launch_child(42, 99, _launch_handle(), current)
+    result = verify_direct_launch_child(
+        42, 99, _launch_handle(), current,
+        _launch_handle(exit_time=None, running=True),
+    )
 
     assert result["classification"] == "verified_direct_launch_child"
     assert result["ownership_confirmed"] is True
     assert all(result["checks"].values())
 
 
+def test_image_uses_launch_time_path_only_when_handle_creation_time_matches():
+    window = _record(99, 42, r"C:\Windows\System32\notepad.exe", 200)
+    current = _snapshot({99: [window]})
+    launch_at_start = _launch_handle(exit_time=None, running=True)
+    launch_at_mismatch = _launch_handle(
+        exit_time="300", running=False, image_path=None)
+
+    result = verify_direct_launch_child(
+        42, 99, launch_at_mismatch, current, launch_at_start)
+
+    assert result["classification"] == "verified_direct_launch_child"
+    assert result["launch_image_source"] == "popen_handle_at_start_same_creation_time"
+    assert result["checks"]["popen_handle_matches_start_identity"] is True
+
+
+def test_launch_time_image_fallback_still_requires_matching_window_image():
+    window = _record(99, 42, r"C:\Windows\System32\mspaint.exe", 200)
+    current = _snapshot({99: [window]})
+    launch_at_start = _launch_handle(exit_time=None, running=True)
+    launch_at_mismatch = _launch_handle(
+        exit_time="300", running=False, image_path=None)
+
+    result = verify_direct_launch_child(
+        42, 99, launch_at_mismatch, current, launch_at_start)
+
+    assert result["ownership_confirmed"] is False
+    assert result["checks"]["popen_handle_matches_start_identity"] is True
+    assert result["checks"]["same_executable_image"] is False
+
+
+def test_launch_time_image_is_not_reused_after_a_popen_handle_pid_reuse():
+    window = _record(99, 42, r"C:\Windows\System32\notepad.exe", 200)
+    current = _snapshot({99: [window]})
+    launch_at_start = _launch_handle(exit_time=None, running=True, creation_time="100")
+    launch_at_mismatch = _launch_handle(
+        exit_time="300", running=False, image_path=None, creation_time="150")
+
+    result = verify_direct_launch_child(
+        42, 99, launch_at_mismatch, current, launch_at_start)
+
+    assert result["ownership_confirmed"] is False
+    assert result["checks"]["popen_handle_matches_start_identity"] is False
+    assert result["launch_image_path"] is None
+
+
+def test_direct_child_rejected_if_window_creation_precedes_launch_creation():
+    window = _record(99, 42, r"C:\Windows\System32\notepad.exe", 90)
+    current = _snapshot({99: [window]})
+
+    result = verify_direct_launch_child(
+        42, 99, _launch_handle(), current,
+        _launch_handle(exit_time=None, running=True),
+    )
+
+    assert result["ownership_confirmed"] is False
+    assert result["checks"]["launch_created_before_window"] is False
+
+
 def test_direct_child_rejected_if_launch_process_exited_before_window_creation():
     window = _record(99, 42, r"C:\Windows\System32\notepad.exe", 200)
     current = _snapshot({99: [window]})
 
-    result = verify_direct_launch_child(42, 99, _launch_handle(exit_time="150"), current)
+    result = verify_direct_launch_child(
+        42, 99, _launch_handle(exit_time="150"), current,
+        _launch_handle(exit_time=None, running=True),
+    )
 
     assert result["ownership_confirmed"] is False
     assert result["checks"]["launch_alive_at_window_creation"] is False
@@ -71,7 +137,10 @@ def test_indirect_descendant_is_not_accepted_as_a_direct_child():
     launch = _record(42, 10, r"C:\Windows\System32\notepad.exe", 100)
     current = _snapshot({99: [window, intermediate, launch]})
 
-    result = verify_direct_launch_child(42, 99, _launch_handle(), current)
+    result = verify_direct_launch_child(
+        42, 99, _launch_handle(), current,
+        _launch_handle(exit_time=None, running=True),
+    )
 
     assert result["ownership_confirmed"] is False
     assert result["checks"]["window_parent_pid_matches_launch"] is False
@@ -81,7 +150,10 @@ def test_direct_child_rejected_when_parent_exit_time_is_ambiguous_at_child_creat
     window = _record(99, 42, r"C:\Windows\System32\notepad.exe", 200)
     current = _snapshot({99: [window]})
 
-    result = verify_direct_launch_child(42, 99, _launch_handle(exit_time="200"), current)
+    result = verify_direct_launch_child(
+        42, 99, _launch_handle(exit_time="200"), current,
+        _launch_handle(exit_time=None, running=True),
+    )
 
     assert result["ownership_confirmed"] is False
     assert result["checks"]["launch_alive_at_window_creation"] is False
@@ -91,7 +163,10 @@ def test_direct_child_rejected_when_parent_pid_or_image_does_not_match():
     window = _record(99, 77, r"C:\Windows\System32\\notepad.exe", 200)
     current = _snapshot({99: [window]})
 
-    result = verify_direct_launch_child(42, 99, _launch_handle(), current)
+    result = verify_direct_launch_child(
+        42, 99, _launch_handle(), current,
+        _launch_handle(exit_time=None, running=True),
+    )
 
     assert result["ownership_confirmed"] is False
     assert result["checks"]["window_parent_pid_matches_launch"] is False

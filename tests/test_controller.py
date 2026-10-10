@@ -42,24 +42,66 @@ def test_focus_loss_stops_before_input_with_safe_stage_message():
     controller._pg.write.assert_not_called()
 
 
-def test_focus_activates_top_level_window_before_editor_once():
+def test_focus_activates_top_level_hwnd_before_editor_once():
     controller = WindowsController(1, Cancellation())
     controller._load = Mock()
-    controller._window = Mock()
+    controller._window = Mock(handle=123)
     controller._editor = Mock()
+    controller._user32 = Mock()
+    controller._user32.GetForegroundWindow.return_value = 456
+    controller._user32.IsIconic.return_value = 0
+    controller._user32.SetForegroundWindow.return_value = 1
     controller._wait_for_editor_focus = Mock()
-    controller._guard = Mock()
     order = []
-    controller._window.set_focus.side_effect = lambda: order.append("window")
+    controller._user32.SetForegroundWindow.side_effect = lambda _: order.append("window") or 1
     controller._editor.set_focus.side_effect = lambda: order.append("editor")
     controller._wait_for_editor_focus.side_effect = lambda: order.append("wait")
-    controller._guard.side_effect = lambda: order.append("guard")
 
     controller._focus()
 
-    assert order == ["window", "editor", "wait", "guard"]
-    controller._window.set_focus.assert_called_once_with()
+    assert order == ["window", "editor", "wait"]
+    controller._user32.SetForegroundWindow.assert_called_once_with(123)
+    controller._window.set_focus.assert_not_called()
     controller._editor.set_focus.assert_called_once_with()
+
+
+def test_focus_stops_if_windows_refuses_foreground_activation():
+    controller = WindowsController(1, Cancellation())
+    controller._load = Mock()
+    controller._window = Mock(handle=123)
+    controller._editor = Mock()
+    controller._user32 = Mock()
+    controller._user32.GetForegroundWindow.side_effect = [456, 456]
+    controller._user32.IsIconic.return_value = 0
+    controller._user32.SetForegroundWindow.return_value = 0
+    controller._wait_for_editor_focus = Mock()
+
+    with pytest.raises(DesktopGuardError, match="refused to activate"):
+        controller._focus()
+
+    controller._editor.set_focus.assert_not_called()
+    controller._wait_for_editor_focus.assert_not_called()
+    controller._user32.SetForegroundWindow.assert_called_once_with(123)
+
+
+def test_type_text_stops_without_input_if_windows_refuses_activation():
+    controller = WindowsController(1, Cancellation())
+    controller._load = Mock()
+    controller._window = Mock(handle=123)
+    controller._editor = Mock()
+    controller._pg = Mock()
+    controller._user32 = Mock()
+    controller._user32.GetForegroundWindow.side_effect = [456, 456]
+    controller._user32.IsIconic.return_value = 0
+    controller._user32.SetForegroundWindow.return_value = 0
+
+    result = controller.type_text("hello")
+
+    assert result.status == "failed"
+    assert "Windows refused to activate" in result.message
+    assert "no text was sent" in result.message
+    controller._pg.hotkey.assert_not_called()
+    controller._pg.write.assert_not_called()
 
 
 def test_editor_focus_wait_is_bounded_and_does_not_send_input(monkeypatch):
@@ -74,12 +116,35 @@ def test_editor_focus_wait_is_bounded_and_does_not_send_input(monkeypatch):
     sleep = Mock()
     monkeypatch.setattr("windows_controller.time.sleep", sleep)
 
-    with pytest.raises(DesktopGuardError, match="did not become the foreground editor"):
+    with pytest.raises(DesktopGuardError, match="did not remain foreground"):
         controller._wait_for_editor_focus(timeout=1.0)
 
     assert controller._user32.GetForegroundWindow.call_count == 2
     sleep.assert_called_once_with(0.05)
     assert controller._pg.failSafeCheck.call_count == 2
+
+
+def test_editor_focus_wait_requires_stable_foreground_during_uia_check(monkeypatch):
+    controller = WindowsController(1, Cancellation())
+    controller._window = Mock(handle=123)
+    controller._runtime_id = (7, 8)
+    controller._pg = Mock()
+    controller._user32 = Mock()
+    controller._user32.GetForegroundWindow.side_effect = [123, 0, 0, 123, 123]
+    focused = Mock()
+    focused.GetRuntimeId.return_value = [7, 8]
+    controller._uia = Mock()
+    controller._uia.iuia.GetFocusedElement.return_value = focused
+    ticks = iter((0.0, 0.1, 0.2))
+    monkeypatch.setattr("windows_controller.time.monotonic", lambda: next(ticks))
+    sleep = Mock()
+    monkeypatch.setattr("windows_controller.time.sleep", sleep)
+
+    controller._wait_for_editor_focus(timeout=1.0)
+
+    assert controller._user32.GetForegroundWindow.call_count == 5
+    assert controller._uia.iuia.GetFocusedElement.call_count == 2
+    assert sleep.call_count == 2
 
 
 def test_known_desktop_guard_reason_is_reported_safely():
@@ -142,5 +207,6 @@ def test_direct_calls_validate(text):
 def test_key_result_is_not_verification():
     controller = adapter()
     assert controller.press_key("enter").status == "unverified"
+    assert controller._guard.call_count == 2
     with pytest.raises(ValueError):
         controller.press_key("win")

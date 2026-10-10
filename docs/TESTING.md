@@ -12,7 +12,8 @@ response parsing, rejection of malformed calls, bounded re-prompt and safe stop
 for multiple calls, connection/timeout/HTTP-status/truncated-response handling,
 local-only configuration, missing-model guidance, exact append verification,
 verbatim-text prompt checks, direct-request text correction before approval,
-bounded window/editor focus handoff, sanitized focus/input/verification failure messages,
+mocked Win32 foreground activation and bounded focus confirmation, sanitized
+focus/input/verification failure messages,
 and a mocked Notepad workflow. INFO logs record
 each planner response's wall-clock latency/type and tool name/status without
 task text or tool arguments; these timings become meaningful model measurements

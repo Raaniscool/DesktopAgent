@@ -37,6 +37,12 @@ class WindowsController:
             self._uia = IUIA()
             self._user32 = ctypes.windll.user32
             self._user32.GetForegroundWindow.restype = ctypes.c_void_p
+            self._user32.IsIconic.argtypes = [ctypes.c_void_p]
+            self._user32.IsIconic.restype = ctypes.c_int
+            self._user32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            self._user32.ShowWindow.restype = ctypes.c_int
+            self._user32.SetForegroundWindow.argtypes = [ctypes.c_void_p]
+            self._user32.SetForegroundWindow.restype = ctypes.c_int
             self._user32.GetKeyboardLayout.restype = ctypes.c_void_p
             self._user32.GetKeyboardLayout.argtypes = [ctypes.c_ulong]
             self._user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
@@ -125,23 +131,30 @@ class WindowsController:
             self._pg.failSafeCheck()
             if self._user32.GetForegroundWindow() == self._window.handle:
                 focused = self._uia.iuia.GetFocusedElement()
-                if tuple(focused.GetRuntimeId()) == self._runtime_id:
+                # Confirm the top-level window stayed foreground while UIA was queried.
+                if (tuple(focused.GetRuntimeId()) == self._runtime_id
+                        and self._user32.GetForegroundWindow() == self._window.handle):
                     return
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise DesktopGuardError("Notepad did not become the foreground editor")
+                raise DesktopGuardError("Notepad did not remain foreground with the identified editor focused")
             time.sleep(min(0.05, remaining))
 
     def _focus(self) -> None:
         self._load()
         if self._window is None or self._editor is None:
             raise DesktopGuardError("No owned Notepad editor")
-        # First activate the top-level Notepad window, then focus its identified editor.
-        # Focus polling is read-only; activation is attempted exactly once.
-        self._window.set_focus()
+        handle = self._window.handle
+        if self._user32.GetForegroundWindow() != handle:
+            # Desktop(backend="uia") returns UIA wrappers; their set_focus() can focus
+            # an element without activating its top-level HWND. Activate the owned HWND.
+            if self._user32.IsIconic(handle):
+                self._user32.ShowWindow(handle, 9)  # SW_RESTORE
+            if (not self._user32.SetForegroundWindow(handle)
+                    and self._user32.GetForegroundWindow() != handle):
+                raise DesktopGuardError("Windows refused to activate the identified Notepad window")
         self._editor.set_focus()
         self._wait_for_editor_focus()
-        self._guard()
 
     def type_text(self, text: str) -> ToolResult:
         # Defense in depth for direct calls as well as registry calls.
@@ -216,6 +229,7 @@ class WindowsController:
         if not isinstance(key, str) or key not in PERMITTED_KEYS:
             raise ValueError("Key not permitted")
         self._focus()
+        self._guard()
         self._pg.press(key)
         self._guard()
         return ToolResult("unverified", "Key sent to the identified editor; resulting document/caret state not verified")

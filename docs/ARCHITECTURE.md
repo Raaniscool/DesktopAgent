@@ -9,8 +9,9 @@
   and keyboard modules declare only the three supported tools.
 - `safety.py`: mandatory console approval and cooperative cancellation token.
 - `windows_controller.py`: lazy Windows imports, fixed Notepad launch, pywinauto
-  UIA identification/readback, top-level/editor focus handoff with a bounded
-  read-only confirmation poll, fail-safe PyAutoGUI input and sanitized typing failures.
+  UIA identification/readback, explicit Win32 top-level foreground activation,
+  UIA editor focus with bounded read-only confirmation, fail-safe PyAutoGUI input
+  and sanitized typing failures.
 - `observation.py`: verified/unverified/failed/denied/cancelled results and history.
 
 Flow: task → native Ollama tool call → validate → display/approve → recheck

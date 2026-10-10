@@ -107,9 +107,11 @@ Caps Lock off, and select the standard **US English keyboard layout**.
 ## Scope and limitations
 
 - `open_notepad`: fixed Windows executable; the discovered window must match the
-  launched process PID and contain one blank accessible editor. Modern Notepad may
-  restore tabs or have unsupported UIA controls; refusals are
-  intentional. Launched windows are not auto-closed on failure/cancellation.
+  launched PID or be a verified direct child of that exact Popen process. The child
+  case requires a matching parent PID, executable image, and creation/exit-time
+  evidence from the Popen-owned handle. It must still contain one blank accessible
+  editor. Modern Notepad may restore tabs or have unsupported UIA controls; refusals
+  are intentional. Launched windows are not auto-closed on failure/cancellation.
 - `type_text`: printable ASCII plus newlines, 1–1000 characters by default. Appends
   to the **identified Notepad editor**, not arbitrary foreground applications.
   This deliberate scope restriction avoids typing into the approval terminal. For

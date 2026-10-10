@@ -8,7 +8,12 @@ import time
 from observation import ToolResult
 from safety import Cancellation
 from tools.registry import PERMITTED_KEYS
-from windows_process_diagnostics import capture_process_hierarchy, summarize_process_relationship
+from windows_process_diagnostics import (
+    capture_process_handle_identity,
+    capture_process_hierarchy,
+    summarize_process_relationship,
+    verify_direct_launch_child,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -31,7 +36,8 @@ class WindowsController:
         self._launched_process_id = None
         self._launch_executable_path = None
         self._launch_process_diagnostics = None
-        self._last_process_mismatch_diagnostics = None
+        self._last_process_relationship_diagnostics = None
+        self._window_ownership_basis = None
         self._pg = None
 
     def _load(self) -> None:
@@ -88,7 +94,8 @@ class WindowsController:
         self._launched_process_id = None
         self._launch_executable_path = None
         self._launch_process_diagnostics = None
-        self._last_process_mismatch_diagnostics = None
+        self._last_process_relationship_diagnostics = None
+        self._window_ownership_basis = None
         existing = self._desktop.windows(class_name="Notepad")
         logger.debug("desktop_stage=window_discovery status=checked existing_notepad_count=%d", len(existing))
         if existing:
@@ -139,15 +146,22 @@ class WindowsController:
                         window_class = window.element_info.class_name
                     except Exception as exc:
                         window_class = f"unavailable:{type(exc).__name__}"
-                    if self.process_diagnostics:
-                        self._last_process_mismatch_diagnostics = self._diagnose_process_mismatch(
-                            window_process_id, window_hwnd, window_class)
-                    logger.info("desktop_stage=window_discovery status=failed reason=process_mismatch "
-                                "hwnd=%s window_class=%s launched_process_id=%s window_process_id=%s "
-                                "ownership_confirmed=false input_sent=false",
+                    self._last_process_relationship_diagnostics = self._diagnose_process_mismatch(
+                        process, window_process_id, window_hwnd, window_class)
+                    if not self._last_process_relationship_diagnostics["ownership_confirmed"]:
+                        logger.info("desktop_stage=window_discovery status=failed reason=process_mismatch "
+                                    "hwnd=%s window_class=%s launched_process_id=%s window_process_id=%s "
+                                    "ownership_confirmed=false input_sent=false",
+                                    window_hwnd, window_class, self._launched_process_id, window_process_id)
+                        return ToolResult("failed", "Could not confirm that the Notepad window belongs to the "
+                                          "launched process; no input sent")
+                    self._window_ownership_basis = "verified_direct_child"
+                    logger.info("desktop_stage=window_discovery status=verified "
+                                "reason=verified_direct_launch_child hwnd=%s window_class=%s "
+                                "launched_process_id=%s window_process_id=%s ownership_confirmed=true",
                                 window_hwnd, window_class, self._launched_process_id, window_process_id)
-                    return ToolResult("failed", "Could not confirm that the Notepad window belongs to the "
-                                      "launched process; no input sent")
+                else:
+                    self._window_ownership_basis = "launch_pid_match"
                 editors = [item for item in window.descendants()
                            if item.element_info.control_type in {"Edit", "Document"}
                            and item.element_info.class_name in {"Edit", "RichEditD2DPT"}
@@ -190,13 +204,11 @@ class WindowsController:
         return ToolResult("failed", "Timed out identifying a single supported Notepad editor; "
                           "Notepad may be open. No input sent")
 
-    def _diagnose_process_mismatch(self, window_process_id, window_hwnd, window_class):
-        """Capture read-only process evidence; this never relaxes the PID ownership guard."""
+    def _diagnose_process_mismatch(self, launch_process, window_process_id, window_hwnd, window_class):
+        """Capture read-only evidence and verify only a directly spawned Notepad child."""
         launched_pid = self._launched_process_id
         try:
             current_snapshot = capture_process_hierarchy((launched_pid, window_process_id))
-            relationship = summarize_process_relationship(
-                launched_pid, window_process_id, self._launch_process_diagnostics, current_snapshot)
         except Exception as exc:
             current_snapshot = {
                 "status": "error",
@@ -205,10 +217,31 @@ class WindowsController:
                 "processes": {},
                 "chains": {},
             }
+        try:
+            process_handle = getattr(launch_process, "_handle", None)
+            launch_handle_identity = capture_process_handle_identity(process_handle, launched_pid)
+        except Exception as exc:
+            launch_handle_identity = {
+                "status": "error",
+                "exception_type": type(exc).__name__,
+                "pid": launched_pid,
+            }
+        try:
+            relationship = summarize_process_relationship(
+                launched_pid, window_process_id,
+                self._launch_process_diagnostics or {}, current_snapshot)
+            ownership = verify_direct_launch_child(
+                launched_pid, window_process_id, launch_handle_identity, current_snapshot)
+        except Exception as exc:
             relationship = {
                 "classification": "diagnostics_failed",
                 "launch_pid": launched_pid,
                 "window_pid": window_process_id,
+                "ownership_confirmed": False,
+            }
+            ownership = {
+                "classification": "direct_launch_child_evidence_incomplete",
+                "exception_type": type(exc).__name__,
                 "ownership_confirmed": False,
             }
 
@@ -220,9 +253,11 @@ class WindowsController:
             "window_hwnd": window_hwnd,
             "window_class": window_class,
             "launch_process_at_start": self._launch_process_diagnostics,
+            "launch_process_handle_at_mismatch": launch_handle_identity,
             "current_process_snapshot": current_snapshot,
             "relationship": relationship,
-            "ownership_confirmed": False,
+            "ownership_verification": ownership,
+            "ownership_confirmed": ownership.get("ownership_confirmed") is True,
             "input_sent": False,
         }
 

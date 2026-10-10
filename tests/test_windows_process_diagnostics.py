@@ -4,7 +4,12 @@ from types import SimpleNamespace
 
 from scripts.windows_notepad_integration import report_warnings
 import windows_process_diagnostics as process_diagnostics
-from windows_process_diagnostics import capture_process_hierarchy, summarize_process_relationship
+from windows_process_diagnostics import (
+    capture_process_handle_identity,
+    capture_process_hierarchy,
+    summarize_process_relationship,
+    verify_direct_launch_child,
+)
 
 
 def _record(pid, parent_pid, image_path, creation_time):
@@ -26,6 +31,72 @@ def _snapshot(chains):
     }
 
 
+def _launch_handle(exit_time="300", running=False, image_path=r"C:\Windows\System32\notepad.exe"):
+    return {
+        "status": "ok",
+        "pid": 42,
+        "expected_pid": 42,
+        "image_path": image_path,
+        "creation_time_filetime_100ns": "100",
+        "exit_time_filetime_100ns": exit_time,
+        "process_is_running": running,
+    }
+
+
+def test_verified_direct_child_requires_same_image_parent_pid_and_live_time_order():
+    window = _record(99, 42, r"C:\Windows\System32\notepad.exe", 200)
+    current = _snapshot({99: [window]})
+
+    result = verify_direct_launch_child(42, 99, _launch_handle(), current)
+
+    assert result["classification"] == "verified_direct_launch_child"
+    assert result["ownership_confirmed"] is True
+    assert all(result["checks"].values())
+
+
+def test_direct_child_rejected_if_launch_process_exited_before_window_creation():
+    window = _record(99, 42, r"C:\Windows\System32\notepad.exe", 200)
+    current = _snapshot({99: [window]})
+
+    result = verify_direct_launch_child(42, 99, _launch_handle(exit_time="150"), current)
+
+    assert result["ownership_confirmed"] is False
+    assert result["checks"]["launch_alive_at_window_creation"] is False
+    assert "launch_alive_at_window_creation" in result["failed_checks"]
+
+
+def test_indirect_descendant_is_not_accepted_as_a_direct_child():
+    window = _record(99, 77, r"C:\Windows\System32\notepad.exe", 200)
+    intermediate = _record(77, 42, r"C:\Windows\System32\notepad.exe", 150)
+    launch = _record(42, 10, r"C:\Windows\System32\notepad.exe", 100)
+    current = _snapshot({99: [window, intermediate, launch]})
+
+    result = verify_direct_launch_child(42, 99, _launch_handle(), current)
+
+    assert result["ownership_confirmed"] is False
+    assert result["checks"]["window_parent_pid_matches_launch"] is False
+
+
+def test_direct_child_rejected_when_parent_exit_time_is_ambiguous_at_child_creation():
+    window = _record(99, 42, r"C:\Windows\System32\notepad.exe", 200)
+    current = _snapshot({99: [window]})
+
+    result = verify_direct_launch_child(42, 99, _launch_handle(exit_time="200"), current)
+
+    assert result["ownership_confirmed"] is False
+    assert result["checks"]["launch_alive_at_window_creation"] is False
+
+
+def test_direct_child_rejected_when_parent_pid_or_image_does_not_match():
+    window = _record(99, 77, r"C:\Windows\System32\\notepad.exe", 200)
+    current = _snapshot({99: [window]})
+
+    result = verify_direct_launch_child(42, 99, _launch_handle(), current)
+
+    assert result["ownership_confirmed"] is False
+    assert result["checks"]["window_parent_pid_matches_launch"] is False
+
+
 def test_capture_is_explicitly_unavailable_off_windows(monkeypatch):
     monkeypatch.setattr(process_diagnostics, "os", SimpleNamespace(name="posix"))
     result = capture_process_hierarchy((123, 456))
@@ -33,6 +104,7 @@ def test_capture_is_explicitly_unavailable_off_windows(monkeypatch):
     assert result["status"] == "unavailable"
     assert result["reason"] == "windows_required"
     assert result["requested_pids"] == [123, 456]
+    assert capture_process_handle_identity(123, 123)["status"] == "unavailable"
 
 
 def test_relationship_reports_direct_parent_evidence_without_approving_ownership():

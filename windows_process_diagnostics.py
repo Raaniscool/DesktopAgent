@@ -53,6 +53,90 @@ def capture_process_hierarchy(pids: Iterable[int], max_ancestors: int = 5) -> di
         }
 
 
+def capture_process_handle_identity(process_handle: Any, expected_pid: int) -> dict[str, Any]:
+    """Read identity and lifetime timestamps from a Popen-owned Windows process handle."""
+    if os.name != "nt":
+        return {"status": "unavailable", "reason": "windows_required", "pid": expected_pid}
+    try:
+        handle_value = int(process_handle)
+    except (TypeError, ValueError, OverflowError):
+        return {"status": "error", "reason": "invalid_process_handle", "pid": expected_pid}
+    if handle_value <= 0:
+        return {"status": "error", "reason": "invalid_process_handle", "pid": expected_pid}
+
+    import ctypes
+    from ctypes import wintypes
+
+    class FILETIME(ctypes.Structure):
+        _fields_ = [("dwLowDateTime", wintypes.DWORD), ("dwHighDateTime", wintypes.DWORD)]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetProcessId.argtypes = [wintypes.HANDLE]
+    kernel32.GetProcessId.restype = wintypes.DWORD
+    kernel32.QueryFullProcessImageNameW.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    kernel32.GetProcessTimes.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(FILETIME),
+        ctypes.POINTER(FILETIME),
+        ctypes.POINTER(FILETIME),
+        ctypes.POINTER(FILETIME),
+    ]
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+
+    actual_pid = int(kernel32.GetProcessId(handle_value))
+    if actual_pid == 0:
+        return {
+            "status": "error",
+            "reason": "get_process_id_failed",
+            "pid": expected_pid,
+            "winerror": ctypes.get_last_error(),
+        }
+    result: dict[str, Any] = {"pid": actual_pid, "expected_pid": expected_pid}
+    if actual_pid != expected_pid:
+        result.update(status="error", reason="process_handle_pid_mismatch")
+        return result
+
+    image_buffer = ctypes.create_unicode_buffer(32768)
+    image_length = wintypes.DWORD(len(image_buffer))
+    if kernel32.QueryFullProcessImageNameW(
+            handle_value, 0, image_buffer, ctypes.byref(image_length)):
+        result.update(image_path=image_buffer.value, image_path_status="read")
+    else:
+        result.update(image_path_status="unavailable", image_path_winerror=ctypes.get_last_error())
+
+    creation = FILETIME()
+    exit_time = FILETIME()
+    kernel_time = FILETIME()
+    user_time = FILETIME()
+    if kernel32.GetProcessTimes(
+            handle_value,
+            ctypes.byref(creation),
+            ctypes.byref(exit_time),
+            ctypes.byref(kernel_time),
+            ctypes.byref(user_time)):
+        creation_ticks = (int(creation.dwHighDateTime) << 32) | int(creation.dwLowDateTime)
+        exit_ticks = (int(exit_time.dwHighDateTime) << 32) | int(exit_time.dwLowDateTime)
+        result.update(
+            creation_time_filetime_100ns=str(creation_ticks),
+            creation_time_utc=_filetime_to_utc(creation_ticks),
+            exit_time_filetime_100ns=str(exit_ticks) if exit_ticks else None,
+            exit_time_utc=_filetime_to_utc(exit_ticks) if exit_ticks else None,
+            process_is_running=not bool(exit_ticks),
+            process_times_status="read",
+        )
+    else:
+        result.update(process_times_status="unavailable", process_times_winerror=ctypes.get_last_error())
+    result["status"] = ("ok" if result.get("image_path_status") == "read"
+                        and result.get("process_times_status") == "read" else "partial")
+    return result
+
+
 def _capture_windows_process_hierarchy(pids: list[int], max_ancestors: int) -> dict[str, Any]:
     import ctypes
     from ctypes import wintypes
@@ -171,14 +255,12 @@ def _capture_windows_process_hierarchy(pids: list[int], max_ancestors: int) -> d
                     ctypes.byref(kernel_time),
                     ctypes.byref(user_time)):
                 creation_ticks = (int(creation.dwHighDateTime) << 32) | int(creation.dwLowDateTime)
+                exit_ticks = (int(exit_time.dwHighDateTime) << 32) | int(exit_time.dwLowDateTime)
                 detail["creation_time_filetime_100ns"] = str(creation_ticks)
-                try:
-                    epoch = datetime(1601, 1, 1, tzinfo=timezone.utc)
-                    detail["creation_time_utc"] = (
-                        epoch + timedelta(microseconds=creation_ticks // 10)
-                    ).isoformat()
-                except (OverflowError, ValueError):
-                    detail["creation_time_utc"] = None
+                detail["creation_time_utc"] = _filetime_to_utc(creation_ticks)
+                detail["exit_time_filetime_100ns"] = str(exit_ticks) if exit_ticks else None
+                detail["exit_time_utc"] = _filetime_to_utc(exit_ticks) if exit_ticks else None
+                detail["process_is_running"] = not bool(exit_ticks)
                 detail["creation_time_status"] = "read"
             else:
                 detail["creation_time_status"] = "unavailable"
@@ -388,6 +470,82 @@ def summarize_process_relationship(
     }
 
 
+def verify_direct_launch_child(
+        launch_pid: int,
+        window_pid: int,
+        launch_handle_identity: dict[str, Any],
+        current_snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Confirm only a direct Notepad child whose parent instance is the Popen process.
+
+    A PID link alone is insufficient. The Popen-owned handle must still identify the
+    launched PID, its image must match the visible-window process, creation times must
+    be ordered, and the Popen process must not have exited before the window child.
+    """
+    window = _get_process(current_snapshot, str(window_pid))
+    launch_path = launch_handle_identity.get("image_path")
+    window_path = window.get("image_path") if window else None
+    launch_creation = _creation_ticks(launch_handle_identity)
+    window_creation = _creation_ticks(window) if window else None
+    launch_exit_raw = launch_handle_identity.get("exit_time_filetime_100ns")
+    try:
+        launch_exit = int(launch_exit_raw) if launch_exit_raw is not None else None
+    except (TypeError, ValueError):
+        launch_exit = None
+
+    process_handle_pid = launch_handle_identity.get("pid")
+    checks = {
+        "popen_handle_pid_matches_launch": (
+            process_handle_pid == launch_pid
+            and launch_handle_identity.get("expected_pid", launch_pid) == launch_pid
+        ),
+        "window_process_present": window is not None,
+        "window_parent_pid_matches_launch": (
+            window.get("parent_pid") == launch_pid if window else False
+        ),
+        "same_executable_image": (
+            launch_path.casefold() == window_path.casefold()
+            if isinstance(launch_path, str) and isinstance(window_path, str) else None
+        ),
+        "launch_created_before_window": (
+            launch_creation < window_creation
+            if launch_creation is not None and window_creation is not None else None
+        ),
+        "launch_alive_at_window_creation": (
+            launch_exit == 0 or launch_exit is None
+            if launch_handle_identity.get("process_is_running") is True
+            else (launch_exit > window_creation
+                  if launch_exit is not None and window_creation is not None else None)
+        ),
+    }
+    verified = all(value is True for value in checks.values())
+    if verified:
+        classification = "verified_direct_launch_child"
+    elif any(value is False for value in checks.values()):
+        classification = "direct_launch_child_not_verified"
+    else:
+        classification = "direct_launch_child_evidence_incomplete"
+    return {
+        "classification": classification,
+        "launch_pid": launch_pid,
+        "window_pid": window_pid,
+        "launch_image_path": launch_path,
+        "window_image_path": window_path,
+        "window_parent_pid": window.get("parent_pid") if window else None,
+        "launch_creation_time_filetime_100ns": (
+            str(launch_creation) if launch_creation is not None else None
+        ),
+        "launch_exit_time_filetime_100ns": (
+            str(launch_exit) if launch_exit is not None else None
+        ),
+        "window_creation_time_filetime_100ns": (
+            str(window_creation) if window_creation is not None else None
+        ),
+        "checks": checks,
+        "failed_checks": [name for name, passed in checks.items() if passed is not True],
+        "ownership_confirmed": verified,
+    }
+
+
 def _get_chain(snapshot: dict[str, Any], pid_key: str) -> list[dict[str, Any]]:
     chains = snapshot.get("chains", {})
     chain = chains.get(pid_key, []) if isinstance(chains, dict) else []
@@ -404,6 +562,14 @@ def _get_process(snapshot: dict[str, Any], pid_key: str) -> dict[str, Any] | Non
         if isinstance(record, dict) and record.get("status") == "present":
             return record
     return None
+
+
+def _filetime_to_utc(ticks: int) -> str | None:
+    try:
+        epoch = datetime(1601, 1, 1, tzinfo=timezone.utc)
+        return (epoch + timedelta(microseconds=ticks // 10)).isoformat()
+    except (OverflowError, ValueError):
+        return None
 
 
 def _creation_ticks(record: dict[str, Any]) -> int | None:

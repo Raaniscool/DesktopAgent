@@ -74,6 +74,9 @@ def target_snapshot(controller: WindowsController) -> None:
         process_id=info.process_id,
         launched_process_id=controller._launched_process_id,
         target_pid_matches_launch=info.process_id == controller._launched_process_id,
+        target_ownership_basis=controller._window_ownership_basis,
+        target_ownership_confirmed=controller._window_ownership_basis in {
+            "launch_pid_match", "verified_direct_child"},
         editor_class=editor_info.class_name,
         editor_control_type=editor_info.control_type,
         editor_visible=bool(editor.is_visible()),
@@ -160,11 +163,12 @@ def run() -> int:
         opened = controller.open_notepad()
     report_warnings("open_notepad", caught)
     report("open_notepad", status=opened.status, message=opened.message)
+    relationship = controller._last_process_relationship_diagnostics
+    if relationship is not None:
+        report("process_relationship_diagnostics", **relationship)
     if opened.status != "verified":
-        mismatch = controller._last_process_mismatch_diagnostics
-        if mismatch is not None:
-            report("process_mismatch_diagnostics", **mismatch)
-        failed_stage = ("window_process_ownership" if mismatch is not None
+        failed_stage = ("window_process_ownership"
+                        if relationship is not None and not relationship.get("ownership_confirmed")
                         else "window_discovery_or_editor_identification")
         report("result", status="failed", failed_stage=failed_stage)
         return 1

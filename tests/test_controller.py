@@ -32,7 +32,7 @@ def launch_controller_fixture(monkeypatch, window_process_id, process_diagnostic
     controller._desktop.windows.side_effect = [[], [window]]
     controller._read = Mock(return_value="")
     monkeypatch.setenv("SystemRoot", r"C:\Windows")
-    monkeypatch.setattr("windows_controller.subprocess.Popen", Mock(return_value=Mock(pid=42)))
+    monkeypatch.setattr("windows_controller.subprocess.Popen", Mock(return_value=Mock(pid=42, _handle=55)))
     return controller, window, editor
 
 
@@ -47,7 +47,7 @@ def test_open_notepad_rejects_window_not_owned_by_launched_process(monkeypatch):
     window.descendants.assert_not_called()
 
 
-def test_process_mismatch_diagnostics_are_read_only_and_do_not_relax_ownership(monkeypatch, caplog):
+def test_verified_direct_launch_child_is_owned_before_editor_identification(monkeypatch, caplog):
     launch = {
         "status": "ok",
         "processes": {
@@ -79,22 +79,70 @@ def test_process_mismatch_diagnostics_are_read_only_and_do_not_relax_ownership(m
             "99": [window_process, {**launch_parent, "parent_link_status": "creation_time_consistent"}],
         },
     }
+    launch_handle = {
+        "status": "ok", "pid": 42, "expected_pid": 42,
+        "image_path": r"C:\Windows\System32\notepad.exe",
+        "creation_time_filetime_100ns": "100",
+        "exit_time_filetime_100ns": "300",
+        "process_is_running": False,
+    }
     capture = Mock(side_effect=[launch, current])
     monkeypatch.setattr("windows_controller.capture_process_hierarchy", capture)
-    controller, window, _ = launch_controller_fixture(
+    handle_capture = Mock(return_value=launch_handle)
+    monkeypatch.setattr("windows_controller.capture_process_handle_identity", handle_capture)
+    controller, window, editor = launch_controller_fixture(
         monkeypatch, window_process_id=99, process_diagnostics=True)
     caplog.set_level("INFO", logger="windows_controller")
 
     result = controller.open_notepad()
 
-    assert result.status == "failed"
-    assert "belongs to the launched process" in result.message
-    assert controller._last_process_mismatch_diagnostics["relationship"]["classification"] == (
-        "window_direct_child_of_launch")
-    assert controller._last_process_mismatch_diagnostics["ownership_confirmed"] is False
-    assert controller._last_process_mismatch_diagnostics["input_sent"] is False
-    assert "hwnd=0x7b" in caplog.text and "ownership_confirmed=false input_sent=false" in caplog.text
+    assert result.status == "verified"
+    assert controller._window is window
+    assert controller._editor is editor
+    assert controller._window_ownership_basis == "verified_direct_child"
+    relationship = controller._last_process_relationship_diagnostics
+    assert relationship["relationship"]["classification"] == "window_direct_child_of_launch"
+    assert relationship["ownership_verification"]["classification"] == "verified_direct_launch_child"
+    assert relationship["ownership_confirmed"] is True
+    assert relationship["input_sent"] is False
+    assert "reason=verified_direct_launch_child" in caplog.text
     assert [item.args[0] for item in capture.call_args_list] == [(42,), (42, 99)]
+    handle_capture.assert_called_once_with(55, 42)
+
+
+def test_same_image_unrelated_pid_parent_is_still_rejected(monkeypatch):
+    launch_record = {
+        "pid": 42, "status": "present", "parent_pid": 1,
+        "image_name": "notepad.exe", "image_path": r"C:\Windows\System32\notepad.exe",
+        "creation_time_filetime_100ns": "100",
+    }
+    launch = {"status": "ok", "processes": {"42": launch_record}, "chains": {"42": [launch_record]}}
+    unrelated_window = {
+        "pid": 99, "status": "present", "parent_pid": 77,
+        "image_name": "notepad.exe", "image_path": r"C:\Windows\System32\notepad.exe",
+        "creation_time_filetime_100ns": "200",
+    }
+    current = {"status": "partial", "processes": {"99": unrelated_window}, "chains": {"99": [unrelated_window]}}
+    monkeypatch.setattr(
+        "windows_controller.capture_process_hierarchy", Mock(side_effect=[launch, current]))
+    monkeypatch.setattr(
+        "windows_controller.capture_process_handle_identity",
+        Mock(return_value={
+            "status": "ok", "pid": 42, "expected_pid": 42,
+            "image_path": r"C:\Windows\System32\notepad.exe",
+            "creation_time_filetime_100ns": "100",
+            "exit_time_filetime_100ns": "300", "process_is_running": False,
+        }),
+    )
+    controller, window, _ = launch_controller_fixture(
+        monkeypatch, window_process_id=99, process_diagnostics=True)
+
+    result = controller.open_notepad()
+
+    assert result.status == "failed"
+    assert controller._last_process_relationship_diagnostics["ownership_confirmed"] is False
+    assert controller._last_process_relationship_diagnostics["ownership_verification"]["checks"][
+        "window_parent_pid_matches_launch"] is False
     window.descendants.assert_not_called()
 
 
@@ -111,9 +159,10 @@ def test_process_diagnostic_errors_do_not_bypass_fail_closed_pid_guard(monkeypat
     assert result.status == "failed"
     assert "belongs to the launched process" in result.message
     assert controller._launch_process_diagnostics["status"] == "error"
-    assert controller._last_process_mismatch_diagnostics["relationship"]["classification"] == (
-        "diagnostics_failed")
-    assert "private process detail" not in str(controller._last_process_mismatch_diagnostics)
+    assert controller._last_process_relationship_diagnostics["current_process_snapshot"]["status"] == (
+        "error")
+    assert controller._last_process_relationship_diagnostics["ownership_confirmed"] is False
+    assert "private process detail" not in str(controller._last_process_relationship_diagnostics)
     window.descendants.assert_not_called()
 
 

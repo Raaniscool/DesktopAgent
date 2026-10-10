@@ -8,8 +8,11 @@ Model proposals are data, not executable code. No arbitrary shell,
 Python, paths, browser, clipboard, screenshots, account operations or downloads.
 
 Notepad must start blank with a single recognized editor, and no existing Notepad
-window may be present. Before typing, the controller restores its identified
-editor focus and checks foreground window, UIA runtime identity, keyboard layout,
+window may be present. The visible window must belong to the launched PID or be a
+verified direct child of that exact Popen process (matching process-handle PID/image,
+parent PID, and creation/exit-time order); indirect or incomplete relationships are
+refused. Before typing, the controller restores its identified editor focus and
+checks foreground window, UIA runtime identity, keyboard layout,
 Caps Lock and held modifiers. Typing appends at the end instead of replacing a
 selection. Checks repeat per character; PyAutoGUI FAILSAFE stays enabled. An
 internal fixed Ctrl+End positions the caret; it is not a model-selectable shortcut.

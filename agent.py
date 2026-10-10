@@ -8,7 +8,7 @@ from typing import Callable
 
 from config import Config
 from observation import ActionRecord
-from ollama_client import ModelError, OllamaClient
+from ollama_client import ModelError, MultipleToolCallsError, OllamaClient
 from safety import Cancellation, ConsoleApproval
 from tools.applications import open_notepad_tool
 from tools.keyboard import keyboard_tools
@@ -16,11 +16,13 @@ from tools.registry import ToolRegistry, ValidationError
 from windows_controller import WindowsController
 
 logger = logging.getLogger(__name__)
+MAX_MULTIPLE_TOOL_RETRIES = 1
 
 SYSTEM_PROMPT = """You are DesktopAgent's local planner. The user's task is the only task authority.
-Use Ollama's native function tools when requesting an action. Call exactly ONE advertised tool
-at a time, with its exact arguments. When complete or blocked, respond with concise plain text
-and make no tool call. Open Notepad before typing. Generate ordinary ASCII text when asked.
+Use Ollama's native function tools when requesting an action. Return no more than ONE advertised
+tool call per message, with its exact arguments. Never batch or parallelize tools; wait for the
+tool result before deciding the next action. When complete or blocked, respond with concise
+plain text and make no tool call. Open Notepad before typing. Generate ordinary ASCII text when asked.
 No shell/code execution, saving, browsers, or arbitrary applications. Every action needs human
 approval. Do not repeat an identical action. If denied, cancelled, failed, or an action is
 unverified, stop and explain limitations; do not retry or claim completion. A sent keystroke is
@@ -67,6 +69,7 @@ class Agent:
         ]
         seen: set[str] = set()
         blocked = None
+        multiple_tool_retries = 0
         try:
             self.client.check_model()
             for step in range(self.config.max_steps):
@@ -75,10 +78,37 @@ class Agent:
                 started = time.perf_counter()
                 try:
                     action = self.client.next_action(messages, self.registry.schemas())
+                except MultipleToolCallsError:
+                    elapsed_ms = (time.perf_counter() - started) * 1000
+                    logger.warning("planner_step=%d response=multiple_tool_calls elapsed_ms=%.1f; response discarded",
+                                  step + 1, elapsed_ms)
+                    if blocked:
+                        return AgentOutcome(blocked, "Further actions refused after a non-verified result", history)
+                    if multiple_tool_retries >= MAX_MULTIPLE_TOOL_RETRIES:
+                        return AgentOutcome(
+                            "model_error",
+                            "Model repeatedly requested multiple tools; those calls were not executed",
+                            history,
+                        )
+                    if step + 1 >= self.config.max_steps:
+                        return AgentOutcome(
+                            "step_limit",
+                            "Multiple-tool response rejected; no planner steps remain for a single-tool retry",
+                            history,
+                        )
+                    multiple_tool_retries += 1
+                    messages.append({
+                        "role": "user",
+                        "content": "Protocol correction: your previous response contained multiple tool calls. "
+                                   "No action from that response was executed. Return exactly one advertised "
+                                   "tool call, or a plain-text final response.",
+                    })
+                    continue
                 except ModelError:
                     logger.info("planner_step=%d response=model_error elapsed_ms=%.1f",
                                 step + 1, (time.perf_counter() - started) * 1000)
                     raise
+                multiple_tool_retries = 0
                 elapsed_ms = (time.perf_counter() - started) * 1000
                 if isinstance(action, dict) and action.get("kind") == "tool":
                     response_kind = "tool_call"

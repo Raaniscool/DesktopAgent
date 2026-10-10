@@ -4,7 +4,7 @@ import pytest
 from agent import Agent
 from config import Config
 from observation import ToolResult
-from ollama_client import ModelError
+from ollama_client import ModelError, MultipleToolCallsError
 from safety import Cancellation, ConsoleApproval
 
 
@@ -64,6 +64,55 @@ def test_repeat_guard(registry, controller):
     agent, _ = make_agent(registry, [tool("type_text", text="x"), tool("type_text", text="x")])
     assert agent.run("repeat").reason == "repeated_action"
     controller.type_text.assert_called_once()
+
+
+def test_multiple_tool_response_is_discarded_and_replanned_once(registry, controller):
+    client = Mock()
+    client.next_action.side_effect = [
+        MultipleToolCallsError("Model requested multiple tools at once"),
+        tool("open_notepad"),
+        finish(),
+    ]
+    approve = Mock(return_value=True)
+    agent = Agent(Config(), client, registry, approve, Cancellation())
+
+    outcome = agent.run("Open Notepad")
+
+    assert outcome.reason == "model_finished"
+    assert client.next_action.call_count == 3
+    retry_messages = client.next_action.call_args_list[1].args[0]
+    assert any(message.get("role") == "user" and
+               "No action from that response was executed" in message.get("content", "")
+               for message in retry_messages)
+    approve.assert_called_once()
+    controller.open_notepad.assert_called_once()
+
+
+def test_repeated_multiple_tool_responses_stop_safely(registry, controller):
+    client = Mock()
+    client.next_action.side_effect = [
+        MultipleToolCallsError("multiple"), MultipleToolCallsError("multiple"), tool("open_notepad")
+    ]
+    approve = Mock(return_value=True)
+    outcome = Agent(Config(), client, registry, approve, Cancellation()).run("Open Notepad")
+
+    assert outcome.reason == "model_error"
+    assert "repeatedly requested multiple tools" in outcome.message
+    assert client.next_action.call_count == 2
+    approve.assert_not_called()
+    assert not controller.mock_calls
+
+
+def test_multiple_tool_response_respects_step_limit(registry, controller):
+    client = Mock()
+    client.next_action.side_effect = [MultipleToolCallsError("multiple"), tool("open_notepad")]
+    approve = Mock(return_value=True)
+    outcome = Agent(Config(max_steps=1), client, registry, approve, Cancellation()).run("Open Notepad")
+
+    assert outcome.reason == "step_limit"
+    assert client.next_action.call_count == 1
+    approve.assert_not_called()
+    assert not controller.mock_calls
 
 
 @pytest.mark.parametrize("status", ["failed", "unverified", "cancelled"])

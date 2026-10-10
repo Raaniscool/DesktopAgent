@@ -137,6 +137,7 @@ def test_agent_never_executes_multiple_native_tool_calls(registry, controller):
     outcome = Agent(Config(), client, registry, approve, Cancellation()).run("Open Notepad")
 
     assert outcome.reason == "model_error"
+    assert client._opener.open.call_count == 2  # bounded retry; both multi-call responses were discarded
     approve.assert_not_called()
     assert not controller.mock_calls
 

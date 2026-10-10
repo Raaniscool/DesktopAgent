@@ -87,10 +87,10 @@ Caps Lock off, and select the standard **US English keyboard layout**.
 6. On a disposable blank document, test Ctrl+C, fail-safe corner interruption,
    focus loss, and an unsupported keyboard layout. Input must stop/refuse; partial
    input can remain. Record Windows/Notepad/Ollama versions and actual outcomes.
-7. If Ollama returns malformed native tool-call data, multiple calls, an unknown
-   tool or invalid arguments, the agent should stop without executing the proposal.
-   If Notepad's UIA editor cannot be identified, it should refuse input. Report
-   that limitation rather than disabling guards.
+7. Malformed calls, unknown tools and invalid arguments stop without execution.
+   If Ollama returns multiple calls, all are discarded without execution and one
+   bounded single-call correction is requested; a repeated multi-call response
+   stops safely. If Notepad's UIA editor cannot be identified, it refuses input.
 
 ## Scope and limitations
 
@@ -105,8 +105,10 @@ Caps Lock off, and select the standard **US English keyboard layout**.
 - Typing compares before/after text locally; document contents are not sent back
   to the model. Only status summaries are. No screenshots/clipboard are used.
 - Non-verified results halt further execution; the model gets one final-response
-  opportunity within the step budget. No automatic retries. Duplicate identical
-  actions are refused. Every planner response counts toward the step limit.
+  opportunity within the step budget. Computer actions are never auto-retried. A
+  multiple-tool response is discarded in full and may get one bounded correction;
+  repeated multiple calls stop safely. Duplicate actions are refused, and every
+  planner response counts toward the step limit.
 - A model's final summary is explicitly labeled as not independent verification.
   Exact typed-text evidence is not proof of general task completion or saved files.
 - UIA calls can stall inside Windows despite the bounded launch polling loop;

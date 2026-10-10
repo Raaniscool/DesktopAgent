@@ -13,6 +13,10 @@ class ModelError(RuntimeError):
     pass
 
 
+class MultipleToolCallsError(ModelError):
+    """Recoverable protocol error: no call from the response was executed."""
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise ModelError("Ollama redirects are refused; configure the local service URL directly")
@@ -79,7 +83,7 @@ class OllamaClient:
         if not isinstance(tool_calls, list):
             raise ModelError("Ollama returned malformed tool calls; no action executed")
         if len(tool_calls) > 1:
-            raise ModelError("Model requested multiple tools at once; no action executed")
+            raise MultipleToolCallsError("Model requested multiple tools at once; no calls from this response executed")
         if tool_calls:
             call = tool_calls[0]
             function = call.get("function") if isinstance(call, dict) else None

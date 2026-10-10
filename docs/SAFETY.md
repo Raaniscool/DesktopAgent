@@ -18,9 +18,11 @@ behave differently. Never use this prototype on secrets, elevated applications,
 or an unattended desktop. It cannot bypass UAC or permission prompts.
 
 Limits: at most 8 planner turns by default (maximum 50), bounded generated output,
-local request timeout, launch polling timeout, text length cap, no automatic
-retries, and duplicate-action refusal. Windows UIA calls may block outside the
-polling deadline; process-isolated timeouts are future work. Ctrl+C interrupts
+local request timeout, launch polling timeout and text length cap. Computer actions
+are never automatically retried. A response containing multiple tools is discarded
+without executing any call, then gets at most one corrective model turn; repeated
+multi-call output stops. Duplicate actions are refused. Windows UIA calls may block
+outside the polling deadline; process-isolated timeouts are future work. Ctrl+C interrupts
 normal work; a cancellation token is checked before/after approval and during
 input. Cancellation does not roll back partial text or close a launched window.
 The PyAutoGUI corner fail-safe may also leave partial input.

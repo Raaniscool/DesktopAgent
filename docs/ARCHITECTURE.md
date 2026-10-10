@@ -14,9 +14,10 @@
 
 Flow: task → native Ollama tool call → validate → display/approve → recheck
 cancellation → adapter → role=`tool` result feedback → final or bounded stop. At
-most one tool call is accepted per response; malformed or multiple calls stop
-before execution. Non-verified results forbid further tools. A final model
-explanation is advisory; evidence comes from deterministic results.
+most one tool call is executed per response. A multi-call response is discarded
+without executing any of its calls; one corrective model turn is allowed, while
+malformed or repeated multi-call responses stop safely. Non-verified results
+forbid further tools. Final model text is advisory; evidence is deterministic.
 
 Planner logs record each model round trip's wall-clock milliseconds and response
 type. Tool logs record the allowlisted tool name and status, never its arguments.

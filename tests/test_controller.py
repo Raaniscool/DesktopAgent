@@ -14,13 +14,60 @@ def adapter():
     return controller
 
 
-def test_typing_verifies_exact_append():
+def launch_controller_fixture(monkeypatch, window_process_id):
+    controller = WindowsController(1, Cancellation())
+    controller._load = Mock()
+    editor = Mock()
+    editor.element_info.control_type = "Edit"
+    editor.element_info.class_name = "Edit"
+    editor.element_info.element.CurrentIsKeyboardFocusable = True
+    editor.element_info.element.GetRuntimeId.return_value = [4, 5]
+    editor.is_visible.return_value = True
+    editor.is_enabled.return_value = True
+    window = Mock(handle=123)
+    window.element_info.class_name = "Notepad"
+    window.element_info.process_id = window_process_id
+    window.descendants.side_effect = lambda *args, **kwargs: [editor] if not args and not kwargs else []
+    controller._desktop = Mock()
+    controller._desktop.windows.side_effect = [[], [window]]
+    controller._read = Mock(return_value="")
+    monkeypatch.setenv("SystemRoot", r"C:\Windows")
+    monkeypatch.setattr("windows_controller.subprocess.Popen", Mock(return_value=Mock(pid=42)))
+    return controller, window, editor
+
+
+def test_open_notepad_rejects_window_not_owned_by_launched_process(monkeypatch):
+    controller, window, _ = launch_controller_fixture(monkeypatch, window_process_id=99)
+
+    result = controller.open_notepad()
+
+    assert result.status == "failed"
+    assert "belongs to the launched process" in result.message
+    assert controller._window is None
+    window.descendants.assert_not_called()
+
+
+def test_open_notepad_accepts_blank_editor_in_launched_process(monkeypatch):
+    controller, window, editor = launch_controller_fixture(monkeypatch, window_process_id=42)
+
+    result = controller.open_notepad()
+
+    assert result.status == "verified"
+    assert controller._window is window
+    assert controller._editor is editor
+    assert controller._runtime_id == (4, 5)
+    controller._read.assert_called_once_with(editor)
+
+
+def test_typing_verifies_exact_append(caplog):
     controller = adapter()
+    caplog.set_level("DEBUG", logger="windows_controller")
     controller._read = Mock(side_effect=["", "Hello\nworld"])
     assert controller.type_text("Hello\nworld").status == "verified"
     controller._pg.hotkey.assert_called_once_with("ctrl", "end")
     controller._pg.press.assert_called_once_with("enter")
     assert controller._pg.write.call_count == 10
+    assert "Hello" not in caplog.text
 
 
 def test_typing_mismatch_is_failure():
@@ -124,6 +171,38 @@ def test_editor_focus_wait_is_bounded_and_does_not_send_input(monkeypatch):
     assert controller._pg.failSafeCheck.call_count == 2
 
 
+@pytest.mark.parametrize(
+    ("foreground_values", "focused_runtime", "expected_diagnostic"),
+    [
+        ([0], None, "foreground_before_match=False uia_editor_runtime_match=None"),
+        ([123, 123], (7, 9),
+         "foreground_before_match=True uia_editor_runtime_match=False foreground_after_match=True"),
+    ],
+)
+def test_focus_timeout_diagnostics_distinguish_foreground_and_uia(
+        monkeypatch, caplog, foreground_values, focused_runtime, expected_diagnostic):
+    controller = WindowsController(1, Cancellation())
+    controller._window = Mock(handle=123)
+    controller._runtime_id = (7, 8)
+    controller._pg = Mock()
+    controller._user32 = Mock()
+    controller._user32.GetForegroundWindow.side_effect = foreground_values
+    if focused_runtime is not None:
+        focused = Mock()
+        focused.GetRuntimeId.return_value = focused_runtime
+        controller._uia = Mock()
+        controller._uia.iuia.GetFocusedElement.return_value = focused
+    ticks = iter((0.0, 1.0))
+    monkeypatch.setattr("windows_controller.time.monotonic", lambda: next(ticks))
+    caplog.set_level("DEBUG", logger="windows_controller")
+
+    with pytest.raises(DesktopGuardError):
+        controller._wait_for_editor_focus(timeout=1.0)
+
+    assert expected_diagnostic in caplog.text
+    assert "desktop_stage=focus_confirmation status=failed" in caplog.text
+
+
 def test_editor_focus_wait_requires_stable_foreground_during_uia_check(monkeypatch):
     controller = WindowsController(1, Cancellation())
     controller._window = Mock(handle=123)
@@ -149,6 +228,7 @@ def test_editor_focus_wait_requires_stable_foreground_during_uia_check(monkeypat
 
 def test_known_desktop_guard_reason_is_reported_safely():
     controller = adapter()
+    controller._read = Mock(return_value="")
     controller._guard.side_effect = DesktopGuardError("Turn Caps Lock off first")
 
     result = controller.type_text("hello")

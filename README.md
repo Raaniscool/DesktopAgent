@@ -79,13 +79,22 @@ Caps Lock off, and select the standard **US English keyboard layout**.
 
 ### Windows manual acceptance test (not run in the development sandbox)
 
-1. Use a normal, non-elevated interactive Windows desktop; close **all** Notepad
-   windows first. Disable Notepad session restore (start a new session) if needed.
-2. Run `--check`; expect the model to be installed and the local service reachable.
-3. Run the example command. Expect a proposal for `open_notepad`, then `type_text`.
-4. Approve each individually. Confirm a single blank editor opens, `type_text`
-   brings its identified editor to the foreground, and the exact text `Hello from
-   DesktopAgent.` appears. Expect both records to be `verified`.
+1. Use a normal, non-elevated interactive Windows desktop; inspect then close **all**
+   Notepad windows. Disable Notepad session restore (start a new session) if needed.
+2. Before using the planner, run the model-free controller test from the repository
+   root:
+   ```powershell
+   .\.venv\Scripts\python.exe scripts\windows_notepad_integration.py
+   ```
+   Approve its Notepad launch and its
+   unique test-string action separately. A pass requires controller verification
+   and an independent fresh UIA TextPattern read showing the exact string once.
+   It contacts no Ollama service and leaves the unsaved test document open. If it
+   fails, keep the diagnostics and do not retry typing blindly.
+3. Only after that live test passes, run `--check`; expect the local model/service.
+4. Run the example command. Approve `open_notepad` and `type_text` separately.
+   Confirm the corrected proposal is exact and Notepad contains
+   `Hello from DesktopAgent.`; expect both records to be `verified`.
 5. Repeat with approval declined: no declined action should execute.
 6. On a disposable blank document, test Ctrl+C, fail-safe corner interruption,
    focus loss, and an unsupported keyboard layout. Input must stop/refuse; partial
@@ -97,8 +106,9 @@ Caps Lock off, and select the standard **US English keyboard layout**.
 
 ## Scope and limitations
 
-- `open_notepad`: fixed Windows executable; one blank accessible editor required.
-  Modern Notepad may restore tabs or have unsupported UIA controls; refusals are
+- `open_notepad`: fixed Windows executable; the discovered window must match the
+  launched process PID and contain one blank accessible editor. Modern Notepad may
+  restore tabs or have unsupported UIA controls; refusals are
   intentional. Launched windows are not auto-closed on failure/cancellation.
 - `type_text`: printable ASCII plus newlines, 1–1000 characters by default. Appends
   to the **identified Notepad editor**, not arbitrary foreground applications.
